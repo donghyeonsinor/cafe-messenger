@@ -21,6 +21,8 @@ services:
     ports:
       # Vite dev server 기본
       - "5173:5173"
+    command: >
+      bash -lc "npm run make:win"
 
   # 빌드 전용(번들 결과만 artifacts로)
   desktop-build:
