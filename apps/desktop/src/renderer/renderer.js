@@ -1,32 +1,71 @@
-const information = document.getElementById('info')
-information.innerText = `This app is using Chrome (v${versions.chrome()}), Node.js (v${versions.node()}), and Electron (v${versions.electron()})`
+// 컴포넌트 import
+import { createLayout, renderMainContent, renderSidebar } from './components/Layout.js'
+import { createSidebar, attachSidebarEvents } from './components/Sidebar.js'
+import { createAccountManager, attachAccountManagerEvents } from './components/AccountManager.js'
+import { createCafeManager, attachCafeManagerEvents } from './components/CafeManager.js'
+import { createTemplateManager, attachTemplateManagerEvents } from './components/TemplateManager.js'
+import { createMemberList, attachMemberListEvents } from './components/MemberList.js'
 
-// IPC API 테스트
-async function testIpcApis() {
-  try {
-    console.log('[Renderer] Testing IPC APIs...')
+/**
+ * 앱 초기화
+ */
+function initApp() {
+  console.log('[App] Initializing...')
+  console.log('[App] Electron:', window.versions.electron())
+  console.log('[App] Chrome:', window.versions.chrome())
+  console.log('[App] Node:', window.versions.node())
 
-    // 템플릿 목록 조회 테스트
-    const templates = await window.api.templates.getAll()
-    console.log('[Renderer] Templates:', templates)
+  // 레이아웃 렌더링
+  const app = document.getElementById('app')
+  app.innerHTML = createLayout()
 
-    // 계정 목록 조회 테스트
-    const accounts = await window.api.accounts.getAll()
-    console.log('[Renderer] Accounts:', accounts)
+  // 사이드바 렌더링 및 이벤트 연결
+  renderSidebar(createSidebar())
+  attachSidebarEvents(handleNavigation)
 
-    // 카페 목록 조회 테스트
-    const cafes = await window.api.cafes.getAll()
-    console.log('[Renderer] Cafes:', cafes)
+  // 기본 화면 표시 (계정 관리)
+  handleNavigation('accounts')
 
-    // 회원 목록 조회 테스트
-    const members = await window.api.members.getAll()
-    console.log('[Renderer] Members:', members)
+  console.log('[App] ✅ Initialized successfully')
+}
 
-    console.log('[Renderer] ✅ All IPC APIs working correctly!')
-  } catch (error) {
-    console.error('[Renderer] ❌ IPC API test failed:', error)
+/**
+ * 화면 전환 핸들러
+ * @param {string} view - 화면 ID (accounts, cafes, templates, members)
+ */
+function handleNavigation(view) {
+  console.log('[Navigation] Switching to:', view)
+
+  switch (view) {
+    case 'accounts':
+      renderMainContent(createAccountManager())
+      attachAccountManagerEvents()
+      break
+
+    case 'cafes':
+      renderMainContent(createCafeManager())
+      attachCafeManagerEvents()
+      break
+
+    case 'templates':
+      renderMainContent(createTemplateManager())
+      attachTemplateManagerEvents()
+      break
+
+    case 'members':
+      renderMainContent(createMemberList())
+      attachMemberListEvents()
+      break
+
+    default:
+      console.warn('[Navigation] Unknown view:', view)
+      renderMainContent('<div class="p-8"><h2 class="text-2xl">준비 중입니다</h2></div>')
   }
 }
 
-// 앱 로드 시 테스트 실행
-testIpcApis()
+// DOM 로드 완료 후 앱 초기화
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp)
+} else {
+  initApp()
+}
