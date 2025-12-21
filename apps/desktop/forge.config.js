@@ -16,6 +16,11 @@ module.exports = {
         {
           entry: 'src/main/main.js',
           config: 'vite.main.config.js'
+        },
+        {
+          // Preload 스크립트 빌드
+          entry: 'src/preload/preload.js',
+          config: 'vite.preload.config.js'
         }
       ],
       // Renderer 프로세스 설정
