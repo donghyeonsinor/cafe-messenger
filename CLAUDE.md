@@ -237,4 +237,3 @@ cafe-messenger/
 
 - **작성자**: 김동현
 - **언어 컨텍스트**: 한국어 개발팀 (docker-compose.yml에 한글 주석 사용)
-

@@ -261,16 +261,10 @@ function register(ipcMain, win) {
     }
   })
 
-  // API 기반 크롤링 시작
+  // API 기반 크롤링 시작 (로그인 불필요)
   ipcMain.handle('naver:startCrawling', async (event, options = {}) => {
     try {
       const { maxCount = 50 } = options
-
-      // 로그인 상태 확인
-      const isLoggedIn = await checkLoginStatus()
-      if (!isLoggedIn) {
-        throw new Error('로그인이 필요합니다. 먼저 네이버에 로그인해주세요.')
-      }
 
       // 활성화된 카페 목록 조회
       const cafes = store.find('cafes', cafe => cafe.is_active === 1)

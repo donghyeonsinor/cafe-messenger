@@ -10,8 +10,8 @@ export function createLayout() {
       </aside>
 
       <!-- 메인 컨텐츠 영역 -->
-      <main class="flex-1 overflow-y-auto">
-        <div id="main-content" class="container mx-auto p-8">
+      <main class="flex-1 overflow-hidden">
+        <div id="main-content" class="h-full p-8">
           <!-- 각 화면 컴포넌트가 여기에 렌더링됨 -->
         </div>
       </main>
