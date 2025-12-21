@@ -14,9 +14,24 @@ export default defineConfig({
     rollupOptions: {
       external: [
         'electron',
+        'electron/main',
         'better-sqlite3',
-        'electron-store'
-      ]
+        'electron-store',
+        // Node.js 내장 모듈
+        'path',
+        'node:path',
+        'crypto',
+        'node:crypto'
+      ],
+      output: {
+        format: 'cjs',
+        // 모든 로컬 모듈을 단일 번들로 인라인
+        inlineDynamicImports: true
+      }
+    },
+    // CommonJS require()를 제대로 처리하기 위한 설정
+    commonjsOptions: {
+      include: [/node_modules/, /src/]
     }
   }
 });
