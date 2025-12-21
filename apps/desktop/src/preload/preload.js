@@ -43,5 +43,18 @@ contextBridge.exposeInMainWorld('api', {
     create: (data) => ipcRenderer.invoke('members:create', data),
     update: (id, data) => ipcRenderer.invoke('members:update', id, data),
     delete: (id) => ipcRenderer.invoke('members:delete', id)
+  },
+
+  // 네이버 로그인 및 크롤링 관리
+  naver: {
+    openLogin: () => ipcRenderer.invoke('naver:openLogin'),
+    closeWindow: () => ipcRenderer.invoke('naver:closeWindow'),
+    checkLogin: () => ipcRenderer.invoke('naver:checkLogin'),
+    autoLogin: (credentials) => ipcRenderer.invoke('naver:autoLogin', credentials),
+    startCrawling: (options) => ipcRenderer.invoke('naver:startCrawling', options),
+    // 이벤트 리스너 (Main → Renderer)
+    onLoginStatusChange: (callback) => ipcRenderer.on('naver:loginStatusChanged', callback),
+    onCrawlProgress: (callback) => ipcRenderer.on('naver:crawlProgress', callback),
+    onCrawlComplete: (callback) => ipcRenderer.on('naver:crawlComplete', callback)
   }
 })

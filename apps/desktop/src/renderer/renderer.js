@@ -1,6 +1,7 @@
 // 컴포넌트 import
 import { createLayout, renderMainContent, renderSidebar } from './components/Layout.js'
 import { createSidebar, attachSidebarEvents } from './components/Sidebar.js'
+import { createHome, attachHomeEvents } from './components/Home.js'
 import { createAccountManager, attachAccountManagerEvents } from './components/AccountManager.js'
 import { createCafeManager, attachCafeManagerEvents } from './components/CafeManager.js'
 import { createTemplateManager, attachTemplateManagerEvents } from './components/TemplateManager.js'
@@ -23,20 +24,30 @@ function initApp() {
   renderSidebar(createSidebar())
   attachSidebarEvents(handleNavigation)
 
-  // 기본 화면 표시 (계정 관리)
-  handleNavigation('accounts')
+  // 기본 화면 표시 (홈)
+  handleNavigation('home')
 
   console.log('[App] ✅ Initialized successfully')
 }
 
 /**
  * 화면 전환 핸들러
- * @param {string} view - 화면 ID (accounts, cafes, templates, members)
+ * @param {string} view - 화면 ID (home, accounts, cafes, templates, members)
  */
 function handleNavigation(view) {
   console.log('[Navigation] Switching to:', view)
 
+  // 로그인 창 닫기 (홈이 아닌 다른 화면으로 이동 시)
+  if (view !== 'home' && window.api.naver) {
+    window.api.naver.closeWindow().catch(() => {})
+  }
+
   switch (view) {
+    case 'home':
+      renderMainContent(createHome())
+      attachHomeEvents()
+      break
+
     case 'accounts':
       renderMainContent(createAccountManager())
       attachAccountManagerEvents()

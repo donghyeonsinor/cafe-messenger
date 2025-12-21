@@ -1,13 +1,14 @@
 // 사이드바 네비게이션 컴포넌트
 
 const menuItems = [
+  { id: 'home', icon: '🏠', label: '홈', description: '메시지 전송' },
   { id: 'accounts', icon: '🔑', label: '계정 관리', description: '네이버 계정 관리' },
   { id: 'cafes', icon: '🏢', label: '카페 관리', description: '카페 링크 관리' },
   { id: 'templates', icon: '📝', label: '템플릿 관리', description: '쪽지 템플릿' },
   { id: 'members', icon: '👥', label: '회원 관리', description: '수신자 관리' }
 ]
 
-let currentView = 'accounts' // 기본 화면
+let currentView = 'home' // 기본 화면
 
 /**
  * 사이드바 HTML 생성
