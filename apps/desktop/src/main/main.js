@@ -1,6 +1,7 @@
 const { app, BrowserWindow } = require('electron/main')
 const path = require('node:path')
 const { registerIpcHandlers } = require('./ipc/handlers')
+const store = require('./store')
 
 // 메인 윈도우 참조 (전역)
 let mainWindow = null
@@ -43,6 +44,9 @@ function getMainWindow() {
 }
 
 app.whenReady().then(() => {
+  // 데이터베이스 초기화
+  store.initialize()
+
   const win = createWindow()
 
   // IPC 핸들러 등록 (mainWindow 전달)
@@ -59,4 +63,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// 앱 종료 시 데이터베이스 연결 정리
+app.on('will-quit', () => {
+  store.close()
 })
