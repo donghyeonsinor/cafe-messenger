@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": ["Bash"],
+    "deny": [],
+    "defaultMode":"plan",
+    "additionalDirectories": []
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "pwsh -NoProfile -File C:\\Users\\Documents\\claude\\workspaces\\claude-test\\.claude\\statusline-command.ps1"
+  },
+
+  "outputStyle": "Explanatory"
+}

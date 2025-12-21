@@ -1,0 +1,6 @@
+FROM node:24.11.1-bookworm-slim
+
+# npm을 최신으로 업데이트
+RUN npm i -g npm@latest
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    zip unzip \
