@@ -1,8 +1,33 @@
 const { VitePlugin } = require('@electron-forge/plugin-vite');
+const path = require('path');
+const fs = require('fs-extra');
 
 module.exports = {
-  packagerConfig: {},
+  packagerConfig: {
+    // 네이티브 모듈(better-sqlite3)은 asar 압축에서 제외
+    asar: {
+      unpack: '**/node_modules/{better-sqlite3,bindings,file-uri-to-path}/**/*'
+    }
+  },
   rebuildConfig: {},
+  hooks: {
+    // 패키징 후 네이티브 모듈을 resources/app.asar.unpacked에 복사
+    packageAfterPrune: async (_config, buildPath) => {
+      const nativeModules = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+
+      for (const moduleName of nativeModules) {
+        const src = path.join(__dirname, 'node_modules', moduleName);
+        const dest = path.join(buildPath, 'node_modules', moduleName);
+
+        if (fs.existsSync(src)) {
+          await fs.copy(src, dest, { overwrite: true });
+          console.log(`[Forge Hook] Copied ${moduleName} to ${dest}`);
+        } else {
+          console.warn(`[Forge Hook] Module not found: ${src}`);
+        }
+      }
+    }
+  },
   makers: [
     {
       name: '@electron-forge/maker-zip',
