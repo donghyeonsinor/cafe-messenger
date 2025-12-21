@@ -172,7 +172,7 @@ cafe-messenger/
 - ✅ **Phase 1 완료**: Vite + TailwindCSS 개발 환경 구축
 - ✅ **Phase 2 완료**: IPC 인프라 및 데이터 저장소 구현
 - ✅ **Phase 3 완료**: UI 레이아웃 및 전체 화면 구현
-- ⏳ **Phase 4 대기**: 네이버 자동 로그인 및 카페 접속 (BrowserView)
+- ✅ **Phase 4 완료**: 네이버 로그인 (BrowserWindow) 및 API 기반 카페 회원 크롤링
 - ⏳ **Phase 5 대기**: 쪽지 발송 로직 (대량 발송, 스케줄링, Rate limiting)
 
 **구현된 기능:**
@@ -181,6 +181,8 @@ cafe-messenger/
 - 쪽지 템플릿 관리 (이름 + 내용만, CRUD)
 - 회원 관리 (카페별 필터링, 실시간 검색, CRUD)
 - 컴포넌트 기반 UI (사이드바 네비게이션, 동적 라우팅)
+- **홈 화면 크롤링**: 탐색 시작 → API 기반 회원 수집 (50명) → 메시지 전송 플로우
+- **네이버 로그인**: BrowserWindow로 로그인 페이지 표시, 자동 로그인 지원
 
 **기술 스택:**
 - **순수 JavaScript**: TypeScript 없음
@@ -237,3 +239,4 @@ cafe-messenger/
 
 - **작성자**: 김동현
 - **언어 컨텍스트**: 한국어 개발팀 (docker-compose.yml에 한글 주석 사용)
+
