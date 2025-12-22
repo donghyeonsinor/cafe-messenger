@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "allow": ["Bash","Web Fetch"],
+    "allow": ["Bash","webfetch"],
     "deny": [],
     "defaultMode":"plan",
     "additionalDirectories": []
