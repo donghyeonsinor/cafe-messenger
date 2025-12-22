@@ -254,7 +254,6 @@ export function attachCafeManagerEvents() {
 
       closeModal()
       await loadCafes()
-      showToast('카페가 추가되었습니다', 'success')
     } catch (error) {
       console.error('카페 추가 실패:', error)
       showToast(error.message || '카페 추가에 실패했습니다', 'error')

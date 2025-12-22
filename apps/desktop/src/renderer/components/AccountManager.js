@@ -243,7 +243,6 @@ export function attachAccountManagerEvents() {
 
       closeModal()
       await loadAccounts()
-      showToast('계정이 추가되었습니다', 'success')
     } catch (error) {
       console.error('계정 추가 실패:', error)
       showToast(error.message || '계정 추가에 실패했습니다', 'error')

@@ -1,10 +1,64 @@
 // SQLite 데이터 저장소
 // better-sqlite3를 사용한 영구 데이터 저장
 
-const Database = require('better-sqlite3')
+// 주의: better-sqlite3는 lazy loading으로 로드됨 (Vite 번들링 호환성)
+let Database = null
 const path = require('path')
 const { app } = require('electron')
 const { SCHEMAS, TABLE_COLUMNS } = require('./schema')
+
+/**
+ * better-sqlite3 네이티브 바인딩 경로 찾기
+ * Electron 패키징 후 Windows용 prebuild 바이너리를 찾음
+ *
+ * 우선순위:
+ * 1. 패키징된 앱의 prebuilds 폴더 (Windows용 prebuild)
+ * 2. extraResource로 복사된 prebuilds 폴더
+ * 3. 개발 모드의 prebuilds 폴더
+ * 4. 기본 build/Release 폴더 (fallback)
+ */
+function findNativeBinding() {
+  const fs = require('fs')
+
+  // 플랫폼 정보
+  const platform = process.platform // 'win32'
+  const arch = process.arch // 'x64'
+  const prebuildFolder = `${platform}-${arch}`
+
+  console.log(`[Store] Looking for native binding for ${prebuildFolder}`)
+
+  // 가능한 경로들 (우선순위 순)
+  const possiblePaths = [
+    // 1. 패키징된 앱 - asar.unpacked의 prebuilds (Forge hook으로 복사됨)
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'prebuilds', prebuildFolder, 'better_sqlite3.node'),
+
+    // 2. 패키징된 앱 - extraResource로 복사된 prebuilds
+    path.join(process.resourcesPath || '', 'prebuilds', prebuildFolder, 'better_sqlite3.node'),
+
+    // 3. 개발 모드 - 프로젝트 루트의 prebuilds 폴더 (download-prebuild.js로 다운로드)
+    path.join(__dirname, '..', '..', '..', 'prebuilds', prebuildFolder, 'better_sqlite3.node'),
+
+    // 4. 개발 모드 - node_modules 내 prebuilds
+    path.join(__dirname, '..', '..', '..', 'node_modules', 'better-sqlite3', 'prebuilds', prebuildFolder, 'better_sqlite3.node'),
+
+    // 5. Fallback - 기존 build/Release 경로 (asar.unpacked)
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
+
+    // 6. Fallback - 개발 모드 build/Release
+    path.join(__dirname, '..', '..', '..', 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
+  ]
+
+  for (const bindingPath of possiblePaths) {
+    console.log('[Store] Checking native binding path:', bindingPath)
+    if (fs.existsSync(bindingPath)) {
+      console.log('[Store] Found native binding at:', bindingPath)
+      return bindingPath
+    }
+  }
+
+  console.log('[Store] No native binding found, will use default require')
+  return null
+}
 
 class DataStore {
   constructor() {
@@ -17,20 +71,53 @@ class DataStore {
    * app.whenReady() 이후에 호출해야 함
    */
   initialize() {
-    if (this.initialized) return
+    if (this.initialized) {
+      console.log('[Store] Already initialized, skipping')
+      return
+    }
 
-    // 앱 데이터 디렉토리에 DB 파일 생성
-    const dbPath = path.join(app.getPath('userData'), 'cafe-messenger.db')
-    console.log('[Store] Database path:', dbPath)
+    try {
+      // better-sqlite3 지연 로딩 (Vite 번들링 시 최상위 require 문제 방지)
+      if (!Database) {
+        console.log('[Store] Loading better-sqlite3...')
 
-    this.db = new Database(dbPath)
-    this.db.pragma('journal_mode = WAL') // 성능 향상
+        // 네이티브 바인딩 경로 찾기
+        const nativeBinding = findNativeBinding()
 
-    // 테이블 생성
-    this.initTables()
-    this.initialized = true
+        if (nativeBinding) {
+          // nativeBinding 옵션으로 경로 명시
+          Database = require('better-sqlite3')
+          console.log('[Store] better-sqlite3 loaded with native binding')
+        } else {
+          // 기본 require 사용 (개발 모드)
+          Database = require('better-sqlite3')
+          console.log('[Store] better-sqlite3 loaded with default require')
+        }
+      }
 
-    console.log('[Store] Database initialized successfully')
+      // 앱 데이터 디렉토리에 DB 파일 생성
+      const dbPath = path.join(app.getPath('userData'), 'cafe-messenger.db')
+      console.log('[Store] Database path:', dbPath)
+
+      // 네이티브 바인딩 경로를 옵션으로 전달
+      const nativeBinding = findNativeBinding()
+      const dbOptions = nativeBinding ? { nativeBinding } : {}
+
+      this.db = new Database(dbPath, dbOptions)
+      console.log('[Store] Database connection created')
+
+      this.db.pragma('journal_mode = WAL') // 성능 향상
+      console.log('[Store] WAL mode enabled')
+      
+      // 테이블 생성
+      this.initTables()
+      this.initialized = true
+
+      console.log('[Store] Database initialized successfully')
+    } catch (error) {
+      console.error('[Store] Failed to initialize database:', error)
+      throw error
+    }
   }
 
   /**
@@ -44,12 +131,22 @@ class DataStore {
   }
 
   /**
+   * DB 초기화 여부 확인
+   */
+  ensureInitialized() {
+    if (!this.db) {
+      throw new Error('Database not initialized. Call initialize() first.')
+    }
+  }
+
+  /**
    * 데이터 생성
    * @param {string} table - 테이블 이름
    * @param {object} data - 생성할 데이터
    * @returns {object} 생성된 데이터 (id 포함)
    */
   create(table, data) {
+    this.ensureInitialized()
     const columns = TABLE_COLUMNS[table]
     if (!columns) {
       throw new Error(`Unknown table: ${table}`)
@@ -83,6 +180,7 @@ class DataStore {
    * @returns {array} 모든 레코드
    */
   getAll(table) {
+    this.ensureInitialized()
     const stmt = this.db.prepare(`SELECT * FROM ${table} ORDER BY id DESC`)
     return stmt.all()
   }
@@ -94,6 +192,7 @@ class DataStore {
    * @returns {object|null} 레코드 또는 null
    */
   getById(table, id) {
+    this.ensureInitialized()
     const stmt = this.db.prepare(`SELECT * FROM ${table} WHERE id = ?`)
     return stmt.get(id) || null
   }
@@ -118,6 +217,7 @@ class DataStore {
    * @returns {object|null} 레코드 또는 null
    */
   findOne(table, where) {
+    this.ensureInitialized()
     const conditions = Object.keys(where).map(k => `${k} = @${k}`).join(' AND ')
     const sql = `SELECT * FROM ${table} WHERE ${conditions} LIMIT 1`
     const stmt = this.db.prepare(sql)
@@ -132,6 +232,7 @@ class DataStore {
    * @returns {object|null} 업데이트된 레코드 또는 null
    */
   update(table, id, updates) {
+    this.ensureInitialized()
     // 기존 레코드 확인
     const existing = this.getById(table, id)
     if (!existing) return null
@@ -155,6 +256,7 @@ class DataStore {
    * @returns {boolean} 삭제 성공 여부
    */
   delete(table, id) {
+    this.ensureInitialized()
     const stmt = this.db.prepare(`DELETE FROM ${table} WHERE id = ?`)
     const result = stmt.run(id)
     return result.changes > 0
@@ -164,6 +266,7 @@ class DataStore {
    * 모든 데이터 초기화
    */
   clear() {
+    this.ensureInitialized()
     for (const tableName of Object.keys(SCHEMAS)) {
       this.db.exec(`DELETE FROM ${tableName}`)
     }

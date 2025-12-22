@@ -1,6 +1,5 @@
 // 네이버 계정 관리 IPC 핸들러
 
-const store = require('../store');
 const crypto = require('crypto');
 
 // 비밀번호 암호화/복호화 (간단한 구현, 나중에 개선 가능)
@@ -33,8 +32,10 @@ function decryptPassword(encryptedPassword) {
 
 /**
  * IPC 핸들러 등록
+ * @param {object} ipcMain - Electron IPC 메인 모듈
+ * @param {object} store - 초기화된 DataStore 인스턴스
  */
-function register(ipcMain) {
+function register(ipcMain, store) {
   // 모든 계정 조회
   ipcMain.handle('accounts:getAll', async () => {
     try {

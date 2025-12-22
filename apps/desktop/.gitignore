@@ -139,3 +139,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Native module prebuilds (다운로드된 바이너리)
+prebuilds/
+temp-prebuild.tar.gz

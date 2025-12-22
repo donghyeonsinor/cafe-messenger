@@ -1,11 +1,11 @@
 // 카페 링크 관리 IPC 핸들러
 
-const store = require('../store');
-
 /**
  * IPC 핸들러 등록
+ * @param {object} ipcMain - Electron IPC 메인 모듈
+ * @param {object} store - 초기화된 DataStore 인스턴스
  */
-function register(ipcMain) {
+function register(ipcMain, store) {
   // 모든 카페 조회
   ipcMain.handle('cafes:getAll', async () => {
     try {

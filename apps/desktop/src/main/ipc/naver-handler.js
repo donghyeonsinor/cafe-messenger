@@ -2,20 +2,26 @@
 // BrowserWindow를 사용한 네이버 로그인, 쿠키 기반 API 크롤링
 
 const { BrowserWindow, session } = require('electron')
-const store = require('../store')
 
 // 로그인 윈도우 인스턴스 (싱글톤)
 let loginWindow = null
-let mainWindow = null
+let getMainWindow = null // 함수로 변경
 
 // 네이버 URL
 const NAVER_LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
 
 /**
- * MainWindow 참조 설정
+ * MainWindow getter 함수 설정
  */
-function setMainWindow(win) {
-  mainWindow = win
+function setMainWindowGetter(getter) {
+  getMainWindow = getter
+}
+
+/**
+ * MainWindow 참조 가져오기
+ */
+function getMainWindowRef() {
+  return getMainWindow ? getMainWindow() : null
 }
 
 /**
@@ -27,11 +33,12 @@ function createLoginWindow() {
     return loginWindow
   }
 
+  const mainWin = getMainWindowRef()
   loginWindow = new BrowserWindow({
     width: 500,
     height: 700,
     title: '네이버 로그인',
-    parent: mainWindow,
+    parent: mainWin,
     modal: false,
     webPreferences: {
       nodeIntegration: false,
@@ -148,9 +155,12 @@ function extractMembers(articles) {
 
 /**
  * IPC 핸들러 등록
+ * @param {object} ipcMain - Electron IPC 메인 모듈
+ * @param {function} mainWindowGetter - 메인 윈도우 참조 함수
+ * @param {object} store - 초기화된 DataStore 인스턴스
  */
-function register(ipcMain, win) {
-  setMainWindow(win)
+function register(ipcMain, mainWindowGetter, store) {
+  setMainWindowGetter(mainWindowGetter)
 
   // 로그인 창 열기
   ipcMain.handle('naver:openLogin', async () => {
@@ -165,7 +175,7 @@ function register(ipcMain, win) {
         // 로그인 페이지가 아닌 곳으로 이동하면 로그인 성공으로 판단
         if (url.includes('naver.com') && !url.includes('nidlogin')) {
           const isLoggedIn = await checkLoginStatus()
-          mainWindow?.webContents.send('naver:loginStatusChanged', isLoggedIn)
+          getMainWindowRef()?.webContents.send('naver:loginStatusChanged', isLoggedIn)
 
           if (isLoggedIn) {
             console.log('[Naver] 로그인 성공 감지')
@@ -313,7 +323,7 @@ function register(ipcMain, win) {
                 collectedMembers.set(member.memberKey, member)
 
                 // 진행 상황 알림
-                mainWindow?.webContents.send('naver:crawlProgress', {
+                getMainWindowRef()?.webContents.send('naver:crawlProgress', {
                   current: collectedMembers.size,
                   total: maxCount,
                   member: member,
@@ -339,7 +349,7 @@ function register(ipcMain, win) {
       console.log(`[Naver] 크롤링 완료: ${resultMembers.length}명`)
 
       // 크롤링 완료 알림
-      mainWindow?.webContents.send('naver:crawlComplete', {
+      getMainWindowRef()?.webContents.send('naver:crawlComplete', {
         success: true,
         count: resultMembers.length,
         members: resultMembers
@@ -349,7 +359,7 @@ function register(ipcMain, win) {
     } catch (error) {
       console.error('[Naver] startCrawling 실패:', error)
 
-      mainWindow?.webContents.send('naver:crawlComplete', {
+      getMainWindowRef()?.webContents.send('naver:crawlComplete', {
         success: false,
         error: error.message
       })
@@ -382,6 +392,5 @@ function register(ipcMain, win) {
 
 module.exports = {
   register,
-  setMainWindow,
   closeLoginWindow
 }

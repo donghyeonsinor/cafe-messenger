@@ -1,18 +1,19 @@
 const { app, BrowserWindow } = require('electron/main')
 const path = require('node:path')
+
+// store 모듈 로드 (네이티브 모듈 로드 실패 시 null)
+let store = null
+try {
+  store = require('./store')
+  console.log('[Main] Store module loaded')
+} catch (error) {
+  console.error('[Main] Failed to load store module:', error.message)
+}
+
 const { registerIpcHandlers } = require('./ipc/handlers')
 
 // 메인 윈도우 참조 (전역)
 let mainWindow = null
-let store = null
-
-// store 모듈 로드 시도
-try {
-  store = require('./store')
-  console.log('[Main] Store module loaded successfully')
-} catch (error) {
-  console.error('[Main] Failed to load store module:', error)
-}
 
 const createWindow = () => {
   console.log('[Main] Creating window...')
@@ -74,22 +75,30 @@ function getMainWindow() {
 app.whenReady().then(() => {
   console.log('[Main] App ready')
 
-  // 데이터베이스 초기화
-  try {
-    if (store) {
+  // 1. 데이터베이스 초기화 (에러 발생해도 앱은 계속 실행)
+  if (store) {
+    try {
       store.initialize()
       console.log('[Main] Store initialized')
-    } else {
-      console.warn('[Main] Store not available, skipping initialization')
+    } catch (error) {
+      console.error('[Main] Store initialization failed:', error)
+      // DB 없이도 앱은 실행 (기능 제한됨)
     }
-  } catch (error) {
-    console.error('[Main] Store initialization failed:', error)
+  } else {
+    console.warn('[Main] Store not available, skipping initialization')
   }
 
-  const win = createWindow()
+  // 2. IPC 핸들러 등록 (창 생성 전에 등록해야 함)
+  // store 인스턴스를 전달하여 모든 핸들러가 동일한 초기화된 인스턴스 사용
+  try {
+    registerIpcHandlers(store)
+    console.log('[Main] IPC handlers registered')
+  } catch (error) {
+    console.error('[Main] IPC registration failed:', error)
+  }
 
-  // IPC 핸들러 등록 (mainWindow 전달)
-  registerIpcHandlers(win)
+  // 3. 창 생성 (항상 실행)
+  createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

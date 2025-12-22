@@ -233,7 +233,6 @@ export function attachTemplateManagerEvents() {
       } else {
         // 생성
         await window.api.templates.create({ name, content })
-        showToast('템플릿이 추가되었습니다', 'success')
       }
 
       closeModal()
