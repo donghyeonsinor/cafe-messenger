@@ -42,6 +42,7 @@ const SCHEMAS = {
       cafe_id INTEGER,
       nickname TEXT NOT NULL,
       member_key TEXT NOT NULL UNIQUE,
+      write_date TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT
     )
@@ -53,7 +54,7 @@ const TABLE_COLUMNS = {
   accounts: ['account_name', 'naver_id', 'naver_password', 'is_active'],
   cafes: ['cafe_name', 'cafe_url', 'cafe_id', 'is_active'],
   templates: ['name', 'content'],
-  members: ['cafe_id', 'nickname', 'member_key']
+  members: ['cafe_id', 'nickname', 'member_key', 'write_date']
 }
 
 module.exports = {

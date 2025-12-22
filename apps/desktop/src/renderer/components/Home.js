@@ -4,6 +4,16 @@
 let collectedMembers = []
 let isCrawling = false
 let isExploring = false // 탐색 시작 여부
+let selectedPeriod = '1day' // 기본값: 1일
+
+// 탐색 기한 옵션
+const PERIOD_OPTIONS = [
+  { value: '1day', label: '1일' },
+  { value: '2days', label: '2일' },
+  { value: '3days', label: '3일' },
+  { value: '1week', label: '일주일' },
+  { value: '1month', label: '한 달' }
+]
 
 /**
  * 홈 화면 HTML 생성
@@ -16,7 +26,25 @@ export function createHome() {
         <div class="text-center">
           <div class="text-8xl mb-6">🔍</div>
           <h2 class="text-2xl font-bold text-gray-800 mb-2">신규 회원 조회</h2>
-          <p class="text-gray-500 mb-8">네이버 카페에서 새로운 회원을 찾아보세요</p>
+          <p class="text-gray-500 mb-6">카페에서 새로운 회원을 찾아보세요</p>
+
+          <!-- 탐색 기한 선택 -->
+          <div class="mb-6">
+            <label for="period-select" class="block text-sm font-medium text-gray-700 mb-3">
+              탐색 기한
+            </label>
+            <select
+              id="period-select"
+              class="px-4 py-2 rounded-lg border-2 border-gray-300 text-gray-700 bg-white hover:border-blue-400 focus:border-blue-600 focus:outline-none transition-colors font-medium cursor-pointer min-w-32"
+            >
+              ${PERIOD_OPTIONS.map(opt => `
+                <option value="${opt.value}" ${opt.value === '1day' ? 'selected' : ''}>
+                  ${opt.label}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+
           <button
             id="btn-start-explore"
             class="px-8 py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors font-semibold text-lg shadow-lg"
@@ -59,7 +87,7 @@ export function createHome() {
                 <div class="bg-gray-200 rounded-full h-4 mb-2">
                   <div id="crawling-progress-bar" class="bg-blue-600 rounded-full h-4 transition-all" style="width: 0%"></div>
                 </div>
-                <p id="crawling-progress-text" class="text-sm text-gray-600">0 / 50 명 수집</p>
+                <p id="crawling-progress-text" class="text-sm text-gray-600">수집 중...</p>
               </div>
 
               <!-- 크롤링 완료 상태 (숨김) -->
@@ -78,7 +106,7 @@ export function createHome() {
               <div class="flex justify-between items-center">
                 <h3 class="font-semibold text-gray-800">수집된 회원</h3>
                 <span id="member-count" class="px-2 py-1 bg-blue-100 text-blue-700 text-sm rounded-full">
-                  0 / 50
+                  0명
                 </span>
               </div>
               <p class="text-xs text-gray-500 mt-1">게시글 작성자 닉네임</p>
@@ -158,11 +186,11 @@ function renderMembersList() {
 
   if (!listEl) return
 
-  countEl.textContent = `${collectedMembers.length} / 50`
+  countEl.textContent = `${collectedMembers.length}명`
 
-  // 50명 도달 시 메시지 전송 버튼 활성화
+  // 1명 이상 수집 시 메시지 전송 버튼 활성화
   if (sendBtn) {
-    sendBtn.disabled = collectedMembers.length < 50
+    sendBtn.disabled = collectedMembers.length === 0
   }
 
   if (collectedMembers.length === 0) {
@@ -178,28 +206,138 @@ function renderMembersList() {
   actionsEl?.classList.remove('hidden')
 
   listEl.innerHTML = collectedMembers.map((member, index) => `
-    <div class="flex items-center px-3 py-2 hover:bg-gray-50 rounded ${index % 2 === 0 ? 'bg-gray-50' : ''}">
+    <div class="flex items-center px-3 py-2 hover:bg-gray-100 rounded ${index % 2 === 0 ? 'bg-gray-50' : ''} group relative">
       <span class="w-6 text-xs text-gray-400">${index + 1}</span>
-      <div class="flex-1">
+      <div class="flex-1 min-w-0">
         <span class="text-sm text-gray-800">${escapeHtml(member.nickName)}</span>
-        <span class="text-xs text-gray-400 ml-2 truncate">${member.memberKey.substring(0, 8)}...</span>
+        <span class="text-xs text-gray-400 ml-2">${member.memberKey.substring(0, 8)}...</span>
+      </div>
+      <!-- 팝오버 메뉴 버튼 -->
+      <div class="relative">
+        <button
+          class="member-menu-btn opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-opacity"
+          data-member-key="${member.memberKey}"
+        >
+          <svg class="w-4 h-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+          </svg>
+        </button>
+        <!-- 팝오버 메뉴 -->
+        <div
+          class="member-popover hidden absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-36"
+          data-member-key="${member.memberKey}"
+        >
+          <button
+            class="member-add-btn w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-2"
+            data-member-key="${member.memberKey}"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            제외
+          </button>
+        </div>
       </div>
     </div>
   `).join('')
+
+  // 팝오버 이벤트 등록
+  attachPopoverEvents()
+}
+
+/**
+ * 팝오버 메뉴 이벤트 등록
+ */
+function attachPopoverEvents() {
+  // 메뉴 버튼 클릭 - 팝오버 토글
+  document.querySelectorAll('.member-menu-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const memberKey = btn.dataset.memberKey
+      const popover = document.querySelector(`.member-popover[data-member-key="${memberKey}"]`)
+
+      // 다른 팝오버 닫기
+      document.querySelectorAll('.member-popover').forEach(p => {
+        if (p !== popover) p.classList.add('hidden')
+      })
+
+      // 현재 팝오버 토글
+      popover?.classList.toggle('hidden')
+    })
+  })
+
+  // 제외 버튼 클릭
+  document.querySelectorAll('.member-add-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const memberKey = btn.dataset.memberKey
+      await excludeMember(memberKey)
+    })
+  })
+
+  // 문서 클릭 시 팝오버 닫기
+  document.addEventListener('click', closeAllPopovers)
+}
+
+/**
+ * 모든 팝오버 닫기
+ */
+function closeAllPopovers() {
+  document.querySelectorAll('.member-popover').forEach(p => p.classList.add('hidden'))
+}
+
+/**
+ * 회원을 DB에 저장하고 수집 목록에서 제외
+ */
+async function excludeMember(memberKey) {
+  const member = collectedMembers.find(m => m.memberKey === memberKey)
+  if (!member) return
+
+  try {
+    // DB에 회원 저장 (크롤링 시 수집된 cafeId 사용)
+    await window.api.members.create({
+      cafe_id: member.cafeId || null,
+      nickname: member.nickName,
+      member_key: member.memberKey
+    })
+
+    console.log('[Home] 회원 제외 및 DB 저장:', member.nickName)
+
+    // 수집 목록에서 제거
+    collectedMembers = collectedMembers.filter(m => m.memberKey !== memberKey)
+    renderMembersList()
+
+  } catch (error) {
+    console.error('[Home] 회원 저장 실패:', error)
+    // 중복 회원인 경우에도 목록에서 제거
+    if (error.message?.includes('이미 등록된') || error.message?.includes('UNIQUE')) {
+      console.log('[Home] 이미 등록된 회원 - 목록에서 제거')
+      collectedMembers = collectedMembers.filter(m => m.memberKey !== memberKey)
+      renderMembersList()
+    } else {
+      alert('회원 저장 실패: ' + error.message)
+    }
+  }
 }
 
 /**
  * 크롤링 진행 상태 업데이트
  */
-function updateCrawlProgress(current, total, cafeName) {
+function updateCrawlProgress(current, cafeName, datePeriod) {
   const barEl = document.getElementById('crawling-progress-bar')
   const textEl = document.getElementById('crawling-progress-text')
   const cafeEl = document.getElementById('crawling-cafe-name')
 
-  if (barEl && textEl) {
-    const percent = Math.round((current / total) * 100)
-    barEl.style.width = `${percent}%`
-    textEl.textContent = `${current} / ${total} 명 수집`
+  // 진행 바 애니메이션 (무한 진행 표시)
+  if (barEl) {
+    // 수집 중일 때 50%~80% 범위에서 진행 표시
+    const animatedPercent = Math.min(50 + (current * 2), 80)
+    barEl.style.width = `${animatedPercent}%`
+  }
+
+  if (textEl) {
+    const periodLabel = PERIOD_OPTIONS.find(p => p.value === datePeriod)?.label || datePeriod
+    textEl.textContent = `${current}명 수집됨 (${periodLabel} 이내)`
   }
 
   if (cafeEl && cafeName) {
@@ -211,6 +349,18 @@ function updateCrawlProgress(current, total, cafeName) {
  * 이벤트 핸들러 등록
  */
 export function attachHomeEvents() {
+  // 컴포넌트 마운트 시 상태 초기화 (드롭다운 UI와 동기화)
+  selectedPeriod = '1day'
+  collectedMembers = []
+  isCrawling = false
+  isExploring = false
+
+  // 탐색 기한 드롭다운 이벤트 등록
+  document.getElementById('period-select')?.addEventListener('change', (e) => {
+    selectedPeriod = e.target.value
+    console.log('[Home] 탐색 기한 선택:', selectedPeriod)
+  })
+
   // 탐색 시작 버튼 - 바로 크롤링 시작
   document.getElementById('btn-start-explore')?.addEventListener('click', async () => {
     console.log('[Home] 탐색 시작 클릭')
@@ -234,13 +384,13 @@ export function attachHomeEvents() {
     showExploreStatus('crawling')
 
     try {
-      console.log('[Home] 크롤링 시작')
+      console.log('[Home] 크롤링 시작 (기간:', selectedPeriod, ')')
       isCrawling = true
       collectedMembers = []
       renderMembersList()
-      updateCrawlProgress(0, 50, '')
+      updateCrawlProgress(0, '', selectedPeriod)
 
-      await window.api.naver.startCrawling({ maxCount: 50 })
+      await window.api.naver.startCrawling({ datePeriod: selectedPeriod })
     } catch (error) {
       console.error('[Home] 크롤링 시작 실패:', error)
       alert('크롤링 실패: ' + error.message)
@@ -252,8 +402,8 @@ export function attachHomeEvents() {
 
   // 메시지 전송하기 버튼 - 네이버 로그인 창 열기
   document.getElementById('btn-send-message')?.addEventListener('click', async () => {
-    if (collectedMembers.length < 50) {
-      alert('50명의 회원이 수집되어야 메시지를 전송할 수 있습니다.')
+    if (collectedMembers.length === 0) {
+      alert('수집된 회원이 없습니다. 탐색을 먼저 진행해주세요.')
       return
     }
 
@@ -288,7 +438,13 @@ export function attachHomeEvents() {
   document.getElementById('btn-clear-members')?.addEventListener('click', () => {
     if (confirm('수집된 회원 목록을 초기화하시겠습니까?')) {
       collectedMembers = []
+      selectedPeriod = '1day' // 기본값으로 초기화
       renderMembersList()
+
+      // 드롭다운 기본값으로 초기화
+      const selectEl = document.getElementById('period-select')
+      if (selectEl) selectEl.value = '1day'
+
       // 초기 화면으로 돌아가기
       showExploreView(false)
     }
@@ -305,7 +461,7 @@ export function attachHomeEvents() {
       }
     }
 
-    updateCrawlProgress(data.current, data.total, data.cafe)
+    updateCrawlProgress(data.current, data.cafe, data.datePeriod)
   })
 
   // IPC 이벤트 리스너: 크롤링 완료
@@ -313,10 +469,17 @@ export function attachHomeEvents() {
     console.log('[Home] 크롤링 완료:', data)
     isCrawling = false
 
+    // 진행바 100% 완료
+    const barEl = document.getElementById('crawling-progress-bar')
+    if (barEl) {
+      barEl.style.width = '100%'
+    }
+
     const resultEl = document.getElementById('crawling-result')
     if (resultEl) {
       if (data.success) {
-        resultEl.textContent = `총 ${data.count}명의 회원을 수집했습니다.`
+        const periodLabel = PERIOD_OPTIONS.find(p => p.value === data.datePeriod)?.label || data.datePeriod
+        resultEl.textContent = `${periodLabel} 이내 총 ${data.count}명의 회원을 수집했습니다.`
       } else {
         resultEl.textContent = `오류: ${data.error}`
       }

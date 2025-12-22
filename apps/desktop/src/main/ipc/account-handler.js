@@ -2,16 +2,24 @@
 
 const crypto = require('crypto');
 
-// 비밀번호 암호화/복호화 (간단한 구현, 나중에 개선 가능)
-const ENCRYPTION_KEY = crypto.randomBytes(32); // 실제로는 안전하게 저장해야 함
+// 비밀번호 암호화/복호화
 const IV_LENGTH = 16;
+
+/**
+ * 암호화 키 생성 (고정 키 사용)
+ * SHA-256으로 32바이트 키 생성
+ */
+function getEncryptionKey() {
+  return crypto.createHash('sha256').update('cafe-messenger').digest();
+}
 
 /**
  * 비밀번호 암호화
  */
 function encryptPassword(password) {
+  const key = getEncryptionKey();
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
   let encrypted = cipher.update(password, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   return iv.toString('hex') + ':' + encrypted;
@@ -21,10 +29,11 @@ function encryptPassword(password) {
  * 비밀번호 복호화
  */
 function decryptPassword(encryptedPassword) {
+  const key = getEncryptionKey();
   const parts = encryptedPassword.split(':');
   const iv = Buffer.from(parts[0], 'hex');
   const encrypted = parts[1];
-  const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;

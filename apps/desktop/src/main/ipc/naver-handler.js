@@ -125,9 +125,10 @@ async function crawlArticles(cafeId, categoryId, page = 1) {
   }
 }
 
+
 /**
  * 게시글에서 작성자 정보 추출
- * API 응답 구조: articleList[].item.writerInfo.{nickName, memberKey}
+ * API 응답 구조: articleList[].item.{writerInfo.{nickName, memberKey}, writeDateTimestamp}
  */
 function extractMembers(articles) {
   const members = []
@@ -137,20 +138,47 @@ function extractMembers(articles) {
   }
 
   for (const article of articles) {
-    // 실제 API 응답 구조: article.item.writerInfo
-    const writerInfo = article.item?.writerInfo
+    // 실제 API 응답 구조: article.item
+    const item = article.item
+    const writerInfo = item?.writerInfo
 
     if (writerInfo) {
       const nickName = writerInfo.nickName
       const memberKey = writerInfo.memberKey
+      const writeDateTimestamp = item?.writeDateTimestamp
 
       if (nickName && memberKey) {
-        members.push({ nickName, memberKey })
+        members.push({
+          nickName,
+          memberKey,
+          writeDate: writeDateTimestamp ? new Date(writeDateTimestamp).toISOString() : null,
+          writeDateTimestamp: writeDateTimestamp || null
+        })
       }
     }
   }
 
   return members
+}
+
+/**
+ * 날짜 필터 계산 - 선택된 기간의 최소 타임스탬프 반환
+ * @param {string} datePeriod - '1day', '2days', '3days', '1week', '1month'
+ * @returns {number|null} 최소 타임스탬프 (밀리초)
+ */
+function getDateFilter(datePeriod) {
+  if (!datePeriod) return null
+
+  const now = Date.now()
+  const periods = {
+    '1day': 1 * 24 * 60 * 60 * 1000,
+    '2days': 2 * 24 * 60 * 60 * 1000,
+    '3days': 3 * 24 * 60 * 60 * 1000,
+    '1week': 7 * 24 * 60 * 60 * 1000,
+    '1month': 30 * 24 * 60 * 60 * 1000
+  }
+
+  return now - (periods[datePeriod] || 0)
 }
 
 /**
@@ -271,10 +299,15 @@ function register(ipcMain, mainWindowGetter, store) {
     }
   })
 
-  // API 기반 크롤링 시작 (로그인 불필요)
+  // API 기반 크롤링 시작 (날짜 필터링 지원)
   ipcMain.handle('naver:startCrawling', async (event, options = {}) => {
     try {
-      const { maxCount = 50 } = options
+      const { datePeriod } = options
+
+      // 탐색 기한 필수 체크
+      if (!datePeriod) {
+        throw new Error('탐색 기한을 선택해주세요.')
+      }
 
       // 활성화된 카페 목록 조회
       const cafes = store.find('cafes', cafe => cafe.is_active === 1)
@@ -282,12 +315,16 @@ function register(ipcMain, mainWindowGetter, store) {
         throw new Error('활성화된 카페가 없습니다. 카페 관리에서 카페를 추가하세요.')
       }
 
+      // 날짜 필터 계산
+      const minTimestamp = getDateFilter(datePeriod)
+      const now = new Date()
+      console.log(`[Naver] 현재 시간: ${now.toISOString()} (KST: ${now.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })})`)
+      console.log(`[Naver] 탐색 기한: ${datePeriod}, 최소 타임스탬프: ${new Date(minTimestamp).toISOString()} (KST: ${new Date(minTimestamp).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })})`)
+
       const collectedMembers = new Map() // 중복 제거용 Map (memberKey를 키로)
       let totalProcessed = 0
 
       for (const cafe of cafes) {
-        if (collectedMembers.size >= maxCount) break
-
         // URL 파싱
         const parsed = parseCafeUrl(cafe.cafe_url)
         if (!parsed) {
@@ -299,14 +336,26 @@ function register(ipcMain, mainWindowGetter, store) {
 
         // 페이지네이션 크롤링
         let page = 1
-        const maxPages = 10 // 최대 10페이지
+        const maxPages = 100 // 기간 내 모든 게시글 수집을 위해 페이지 제한 증가
+        let reachedDateLimit = false
 
-        while (page <= maxPages && collectedMembers.size < maxCount) {
+        while (page <= maxPages && !reachedDateLimit) {
           try {
             const data = await crawlArticles(parsed.cafeId, parsed.categoryId, page)
 
+            // 디버깅: API 응답 구조 확인
+            console.log(`[Naver] API 응답 키:`, Object.keys(data))
+            if (data.result) {
+              console.log(`[Naver] result 키:`, Object.keys(data.result))
+            }
+
             // API 응답에서 게시글 배열 찾기
             const articles = data.result?.articleList || data.articleList || data.articles || []
+
+            // 디버깅: 첫 번째 게시글 구조 확인
+            if (articles.length > 0 && page === 1) {
+              console.log(`[Naver] 첫 번째 게시글 구조:`, JSON.stringify(articles[0], null, 2).substring(0, 500))
+            }
 
             if (articles.length === 0) {
               console.log(`[Naver] 더 이상 게시글 없음 (page ${page})`)
@@ -316,18 +365,33 @@ function register(ipcMain, mainWindowGetter, store) {
             const members = extractMembers(articles)
 
             for (const member of members) {
-              if (collectedMembers.size >= maxCount) break
+              // 디버깅: 게시글 날짜 정보 출력
+              if (member.writeDateTimestamp) {
+                const writeDate = new Date(member.writeDateTimestamp)
+                console.log(`[Naver] 게시글 날짜: ${writeDate.toISOString()} (KST: ${writeDate.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}) - ${member.nickName}`)
+              }
+
+              // 날짜 필터링: 기간 외 게시글은 스킵
+              if (member.writeDateTimestamp && member.writeDateTimestamp < minTimestamp) {
+                // 시간순 정렬이므로 기간 외 게시글이 나오면 이후 페이지도 모두 기간 외
+                console.log(`[Naver] 기간 외 게시글 도달 - 게시글: ${new Date(member.writeDateTimestamp).toISOString()}, 기준: ${new Date(minTimestamp).toISOString()}`)
+                reachedDateLimit = true
+                break
+              }
 
               // 중복 체크
               if (!collectedMembers.has(member.memberKey)) {
+                // 카페 정보 추가
+                member.cafeId = cafe.id
+                member.cafeName = cafe.cafe_name
                 collectedMembers.set(member.memberKey, member)
 
                 // 진행 상황 알림
                 getMainWindowRef()?.webContents.send('naver:crawlProgress', {
                   current: collectedMembers.size,
-                  total: maxCount,
                   member: member,
-                  cafe: cafe.cafe_name
+                  cafe: cafe.cafe_name,
+                  datePeriod: datePeriod
                 })
               }
             }
@@ -343,16 +407,21 @@ function register(ipcMain, mainWindowGetter, store) {
             break
           }
         }
+
+        if (reachedDateLimit) {
+          console.log(`[Naver] ${cafe.cafe_name} 카페 탐색 완료 (기간 제한 도달)`)
+        }
       }
 
       const resultMembers = Array.from(collectedMembers.values())
-      console.log(`[Naver] 크롤링 완료: ${resultMembers.length}명`)
+      console.log(`[Naver] 크롤링 완료: ${resultMembers.length}명 (${datePeriod} 이내)`)
 
       // 크롤링 완료 알림
       getMainWindowRef()?.webContents.send('naver:crawlComplete', {
         success: true,
         count: resultMembers.length,
-        members: resultMembers
+        members: resultMembers,
+        datePeriod: datePeriod
       })
 
       return { success: true, members: resultMembers }

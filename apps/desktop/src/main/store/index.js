@@ -128,6 +128,46 @@ class DataStore {
       this.db.exec(schema)
       console.log(`[Store] Table '${tableName}' ready`)
     }
+
+    // 마이그레이션 실행
+    this.runMigrations()
+  }
+
+  /**
+   * 데이터베이스 마이그레이션
+   * 기존 테이블에 새 컬럼 추가
+   */
+  runMigrations() {
+    console.log('[Store] Running migrations...')
+
+    // members 테이블에 write_date 컬럼 추가 (없는 경우)
+    this.addColumnIfNotExists('members', 'write_date', 'TEXT')
+
+    // members 테이블에 member_key 컬럼 추가 (없는 경우)
+    this.addColumnIfNotExists('members', 'member_key', 'TEXT')
+
+    console.log('[Store] Migrations completed')
+  }
+
+  /**
+   * 컬럼이 없으면 추가
+   * @param {string} table - 테이블 이름
+   * @param {string} column - 컬럼 이름
+   * @param {string} type - 컬럼 타입 (예: 'TEXT', 'INTEGER')
+   */
+  addColumnIfNotExists(table, column, type) {
+    try {
+      // 테이블 정보 조회
+      const tableInfo = this.db.prepare(`PRAGMA table_info(${table})`).all()
+      const columnExists = tableInfo.some(col => col.name === column)
+
+      if (!columnExists) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+        console.log(`[Store] Added column '${column}' to table '${table}'`)
+      }
+    } catch (error) {
+      console.error(`[Store] Migration error for ${table}.${column}:`, error)
+    }
   }
 
   /**

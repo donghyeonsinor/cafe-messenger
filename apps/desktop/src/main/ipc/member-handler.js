@@ -29,29 +29,29 @@ function register(ipcMain, store) {
   // 회원 생성
   ipcMain.handle('members:create', async (event, data) => {
     try {
-      const { cafe_id, nickname, user_id } = data;
+      const { cafe_id, nickname, member_key } = data;
 
-      // 유효성 검사
-      if (!cafe_id || !nickname) {
-        throw new Error('카페 ID와 닉네임은 필수입니다');
+      // 유효성 검사 (member_key 또는 nickname 필수)
+      if (!nickname && !member_key) {
+        throw new Error('닉네임 또는 member_key는 필수입니다');
       }
 
-      // 중복 확인
-      const existing = store.find('members', member =>
-        member.cafe_id === cafe_id && member.nickname === nickname
-      );
-      if (existing.length > 0) {
-        throw new Error('이미 등록된 회원입니다');
+      // member_key 기반 중복 확인 (DB 스키마에서 UNIQUE 제약)
+      if (member_key) {
+        const existing = store.find('members', member => member.member_key === member_key);
+        if (existing.length > 0) {
+          throw new Error('이미 등록된 회원입니다');
+        }
       }
 
       // 회원 생성
       const member = store.create('members', {
-        cafe_id,
+        cafe_id: cafe_id || null,
         nickname,
-        user_id: user_id || null
+        member_key: member_key || null
       });
 
-      console.log(`[IPC] Created member: ${nickname} (cafe: ${cafe_id})`);
+      console.log(`[IPC] Created member: ${nickname} (cafe: ${cafe_id}, key: ${member_key})`);
       return member;
     } catch (error) {
       console.error('[IPC] members:create error:', error);
