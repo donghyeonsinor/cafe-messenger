@@ -424,7 +424,7 @@ function register(ipcMain, mainWindowGetter, store) {
       const safeId = escapeForJs(naver_id)
       const safePw = escapeForJs(naver_password)
 
-      // JavaScript로 폼 필드 채우기
+      // JavaScript로 폼 필드 채우기 (아이디, 비밀번호 입력만)
       await loginWindow.webContents.executeJavaScript(`
         (function() {
           const idInput = document.getElementById('id');
@@ -440,21 +440,13 @@ function register(ipcMain, mainWindowGetter, store) {
             pwInput.focus();
             pwInput.value = '${safePw}';
             pwInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-            // 로그인 버튼 클릭
-            setTimeout(() => {
-              const loginBtn = document.getElementById('log.login');
-              if (loginBtn) {
-                loginBtn.click();
-              }
-            }, 500);
           } else {
             console.error('[AutoLogin] 입력 필드를 찾을 수 없습니다');
           }
         })();
       `)
 
-      console.log('[Naver] 자동 로그인 시도')
+      console.log('[Naver] 아이디/비밀번호 자동 입력 완료')
       return { success: true }
     } catch (error) {
       console.error('[Naver] autoLogin 실패:', error)
