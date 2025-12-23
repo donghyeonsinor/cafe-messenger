@@ -5,6 +5,10 @@ let collectedMembers = []
 let isCrawling = false
 let isExploring = false // 탐색 시작 여부
 let selectedPeriod = '1day' // 기본값: 1일
+let selectedTemplate = null // 선택된 템플릿
+let templates = [] // 템플릿 목록
+let isSending = false // 발송 진행 중 여부
+let sendProgress = { current: 0, total: 0, todaySentCount: 0 } // 발송 진행 상황
 
 // 탐색 기한 옵션
 const PERIOD_OPTIONS = [
@@ -63,6 +67,22 @@ export function createHome() {
             <p class="text-gray-600 mt-1">카페 게시글 작성자를 수집합니다</p>
           </div>
           <div class="flex items-center space-x-3">
+            <!-- 템플릿 선택 드롭다운 -->
+            <select
+              id="template-select"
+              class="px-4 py-3 rounded-lg border-2 border-gray-300 bg-white text-gray-700
+                     hover:border-green-400 focus:border-green-600 focus:outline-none
+                     transition-colors font-medium cursor-pointer min-w-48 disabled:bg-gray-100 disabled:cursor-not-allowed"
+              disabled
+            >
+              <option value="">템플릿 선택...</option>
+            </select>
+
+            <!-- 오늘 발송 현황 표시 -->
+            <div id="send-count-badge" class="hidden px-3 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm font-medium">
+              오늘 발송: <span id="today-sent-count">0</span>/50
+            </div>
+
             <button
               id="btn-send-message"
               class="px-6 py-3 bg-green-600 text-white rounded-lg transition-colors font-medium text-lg shadow-md disabled:bg-gray-400 disabled:cursor-not-allowed"
@@ -96,6 +116,36 @@ export function createHome() {
                 <h3 class="text-xl font-semibold text-green-700 mb-2">수집 완료!</h3>
                 <p id="crawling-result" class="text-gray-600 mb-6"></p>
                 <p class="text-sm text-blue-600 font-medium">이제 메시지를 전송할 수 있습니다</p>
+              </div>
+
+              <!-- 메시지 발송 진행 상태 (숨김) -->
+              <div id="sending-status" class="hidden text-center w-full max-w-md">
+                <div class="text-6xl mb-4 animate-pulse">📨</div>
+                <h3 class="text-xl font-semibold text-gray-800 mb-2">메시지 전송 중...</h3>
+                <p id="sending-template-name" class="text-gray-600 mb-4"></p>
+
+                <div class="bg-gray-200 rounded-full h-4 mb-2">
+                  <div id="sending-progress-bar" class="bg-green-600 rounded-full h-4 transition-all" style="width: 0%"></div>
+                </div>
+                <p id="sending-progress-text" class="text-sm text-gray-600">0 / 0 명 발송 완료</p>
+
+                <!-- 오늘 발송 제한 경고 -->
+                <div id="send-limit-warning" class="hidden mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
+                  ⚠️ 오늘 발송 한도(50건)에 도달했습니다.
+                </div>
+              </div>
+
+              <!-- 메시지 발송 완료 상태 (숨김) -->
+              <div id="sending-complete" class="hidden text-center">
+                <div class="text-6xl mb-4">✅</div>
+                <h3 class="text-xl font-semibold text-green-700 mb-2">발송 완료!</h3>
+                <p id="sending-result" class="text-gray-600 mb-6"></p>
+                <button
+                  id="btn-new-search"
+                  class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  🔍 새로운 탐색 시작
+                </button>
               </div>
             </div>
           </div>
@@ -182,16 +232,13 @@ function renderMembersList() {
   const listEl = document.getElementById('collected-members-list')
   const countEl = document.getElementById('member-count')
   const actionsEl = document.getElementById('member-actions')
-  const sendBtn = document.getElementById('btn-send-message')
 
   if (!listEl) return
 
   countEl.textContent = `${collectedMembers.length}명`
 
-  // 1명 이상 수집 시 메시지 전송 버튼 활성화
-  if (sendBtn) {
-    sendBtn.disabled = collectedMembers.length === 0
-  }
+  // 전송 버튼 상태 업데이트
+  updateSendButtonState()
 
   if (collectedMembers.length === 0) {
     listEl.innerHTML = `
@@ -206,38 +253,45 @@ function renderMembersList() {
   actionsEl?.classList.remove('hidden')
 
   listEl.innerHTML = collectedMembers.map((member, index) => `
-    <div class="flex items-center px-3 py-2 hover:bg-gray-100 rounded ${index % 2 === 0 ? 'bg-gray-50' : ''} group relative">
-      <span class="w-6 text-xs text-gray-400">${index + 1}</span>
+    <div class="flex items-center px-3 py-2 hover:bg-gray-100 rounded ${index % 2 === 0 ? 'bg-gray-50' : ''} ${member.sent ? 'opacity-60' : ''} group relative">
+      <!-- 발송 완료 체크 표시 -->
+      <span class="w-6 flex-shrink-0">
+        ${member.sent
+          ? '<span class="text-green-600 font-bold">✓</span>'
+          : '<span class="text-xs text-gray-400">' + (index + 1) + '</span>'}
+      </span>
       <div class="flex-1 min-w-0">
-        <span class="text-sm text-gray-800">${escapeHtml(member.nickName)}</span>
+        <span class="text-sm text-gray-800 ${member.sent ? 'line-through' : ''}">${escapeHtml(member.nickName)}</span>
         <span class="text-xs text-gray-400 ml-2">${member.memberKey.substring(0, 8)}...</span>
       </div>
-      <!-- 팝오버 메뉴 버튼 -->
-      <div class="relative">
-        <button
-          class="member-menu-btn opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-opacity"
-          data-member-key="${member.memberKey}"
-        >
-          <svg class="w-4 h-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
-          </svg>
-        </button>
-        <!-- 팝오버 메뉴 -->
-        <div
-          class="member-popover hidden absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-36"
-          data-member-key="${member.memberKey}"
-        >
+      <!-- 팝오버 메뉴 버튼 (발송 완료 시 숨김) -->
+      ${!member.sent ? `
+        <div class="relative">
           <button
-            class="member-add-btn w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-2"
+            class="member-menu-btn opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-opacity"
             data-member-key="${member.memberKey}"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            <svg class="w-4 h-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
             </svg>
-            제외
           </button>
+          <!-- 팝오버 메뉴 -->
+          <div
+            class="member-popover hidden absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-36"
+            data-member-key="${member.memberKey}"
+          >
+            <button
+              class="member-add-btn w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-2"
+              data-member-key="${member.memberKey}"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              제외
+            </button>
+          </div>
         </div>
-      </div>
+      ` : ''}
     </div>
   `).join('')
 
@@ -346,19 +400,258 @@ function updateCrawlProgress(current, cafeName, datePeriod) {
 }
 
 /**
+ * 템플릿 목록 로드
+ */
+async function loadTemplates() {
+  try {
+    templates = await window.api.templates.getAll()
+    renderTemplateOptions()
+    console.log('[Home] 템플릿 로드 완료:', templates.length, '개')
+  } catch (error) {
+    console.error('[Home] 템플릿 로드 실패:', error)
+  }
+}
+
+/**
+ * 템플릿 드롭다운 렌더링
+ */
+function renderTemplateOptions() {
+  const selectEl = document.getElementById('template-select')
+  if (!selectEl) return
+
+  selectEl.innerHTML = `
+    <option value="">템플릿 선택...</option>
+    ${templates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}
+  `
+}
+
+/**
+ * 전송 버튼 상태 업데이트
+ */
+function updateSendButtonState() {
+  const sendBtn = document.getElementById('btn-send-message')
+  const templateSelect = document.getElementById('template-select')
+
+  if (sendBtn) {
+    // 회원이 있고, 템플릿이 선택되었고, 발송 중이 아닐 때만 활성화
+    const hasMembers = collectedMembers.length > 0
+    const hasTemplate = selectedTemplate !== null
+    sendBtn.disabled = !hasMembers || !hasTemplate || isSending
+  }
+
+  if (templateSelect) {
+    // 회원이 있을 때만 템플릿 선택 가능
+    templateSelect.disabled = collectedMembers.length === 0 || isSending
+  }
+}
+
+/**
+ * 발송 상태 UI 전환
+ */
+function showSendingStatus(status) {
+  const crawlingEl = document.getElementById('crawling-status')
+  const crawlCompleteEl = document.getElementById('crawling-complete')
+  const sendingEl = document.getElementById('sending-status')
+  const sendCompleteEl = document.getElementById('sending-complete')
+
+  // 모두 숨김
+  crawlingEl?.classList.add('hidden')
+  crawlCompleteEl?.classList.add('hidden')
+  sendingEl?.classList.add('hidden')
+  sendCompleteEl?.classList.add('hidden')
+
+  switch (status) {
+    case 'sending':
+      sendingEl?.classList.remove('hidden')
+      break
+    case 'complete':
+      sendCompleteEl?.classList.remove('hidden')
+      break
+    case 'crawl-complete':
+      crawlCompleteEl?.classList.remove('hidden')
+      break
+  }
+}
+
+/**
+ * 로그인 플로우 시작
+ */
+async function startLoginFlow() {
+  try {
+    const credentials = await window.api.accounts.getActiveCredentials()
+    if (!credentials) {
+      alert('활성화된 계정이 없습니다.')
+      return
+    }
+
+    // 로그인 창 열기
+    await window.api.naver.openLogin()
+
+    // 자동 로그인 시도
+    setTimeout(async () => {
+      try {
+        await window.api.naver.autoLogin(credentials)
+      } catch (err) {
+        console.error('[Home] 자동 로그인 실패:', err)
+      }
+    }, 1500)
+
+  } catch (error) {
+    console.error('[Home] 로그인 플로우 실패:', error)
+    alert('로그인을 시작할 수 없습니다: ' + error.message)
+  }
+}
+
+/**
+ * 메시지 발송 시작
+ */
+async function startSendingMessages() {
+  if (!selectedTemplate || collectedMembers.length === 0) {
+    return
+  }
+
+  isSending = true
+  sendProgress = { current: 0, total: collectedMembers.length, todaySentCount: 0 }
+
+  // UI 상태 전환
+  showSendingStatus('sending')
+  updateSendButtonState()
+
+  const templateNameEl = document.getElementById('sending-template-name')
+  if (templateNameEl) {
+    templateNameEl.textContent = `템플릿: ${selectedTemplate.name}`
+  }
+
+  // 진행바 초기화
+  const barEl = document.getElementById('sending-progress-bar')
+  const textEl = document.getElementById('sending-progress-text')
+  if (barEl) barEl.style.width = '0%'
+  if (textEl) textEl.textContent = `0 / ${collectedMembers.length} 명 발송 완료`
+
+  try {
+    // 발송할 회원 목록 (아직 발송하지 않은 회원만)
+    const membersToSend = collectedMembers.filter(m => !m.sent)
+
+    console.log('[Home] 발송 시작:', membersToSend.length, '명')
+    await window.api.naver.startSending(membersToSend, selectedTemplate.content)
+
+  } catch (error) {
+    console.error('[Home] 발송 시작 실패:', error)
+    alert('메시지 발송을 시작할 수 없습니다: ' + error.message)
+    isSending = false
+    showSendingStatus('crawl-complete')
+    updateSendButtonState()
+  }
+}
+
+/**
+ * 발송 진행 상황 업데이트
+ */
+function updateSendProgressUI(data) {
+  sendProgress.current = data.current
+  sendProgress.todaySentCount = data.todaySentCount
+
+  // 진행 바 업데이트
+  const barEl = document.getElementById('sending-progress-bar')
+  const textEl = document.getElementById('sending-progress-text')
+  const countBadge = document.getElementById('send-count-badge')
+  const todayCountEl = document.getElementById('today-sent-count')
+  const limitWarning = document.getElementById('send-limit-warning')
+
+  // 오늘 발송 현황 표시 (초기 정보 또는 진행 중)
+  if (countBadge && todayCountEl) {
+    countBadge.classList.remove('hidden')
+    todayCountEl.textContent = data.todaySentCount
+
+    // 색상 변경: 40건 이상이면 경고 색상
+    if (data.todaySentCount >= 40) {
+      countBadge.className = 'px-3 py-2 bg-red-100 text-red-800 rounded-lg text-sm font-medium'
+    } else if (data.todaySentCount >= 30) {
+      countBadge.className = 'px-3 py-2 bg-orange-100 text-orange-800 rounded-lg text-sm font-medium'
+    } else {
+      countBadge.className = 'px-3 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm font-medium'
+    }
+  }
+
+  // 초기 정보만 표시하는 경우 (발송 시작 전)
+  if (data.initialInfo) {
+    console.log('[Home] 초기 발송 정보 수신 - 오늘 발송:', data.todaySentCount, '건')
+    return
+  }
+
+  if (barEl) {
+    const percent = (data.current / data.total) * 100
+    barEl.style.width = `${percent}%`
+  }
+
+  if (textEl) {
+    textEl.textContent = `${data.current} / ${data.total} 명 발송 완료`
+  }
+
+  // 한도 도달 경고
+  if (limitWarning && data.limitReached) {
+    limitWarning.classList.remove('hidden')
+  }
+
+  // 발송 성공한 회원 체크 표시
+  if (data.success && data.memberKey) {
+    const member = collectedMembers.find(m => m.memberKey === data.memberKey)
+    if (member) {
+      member.sent = true
+      renderMembersList()
+    }
+  }
+}
+
+/**
+ * 발송 완료 처리
+ */
+function handleSendComplete(data) {
+  isSending = false
+
+  const resultEl = document.getElementById('sending-result')
+  if (resultEl) {
+    if (data.success) {
+      const { results } = data
+      resultEl.textContent = `성공: ${results.success}명, 실패: ${results.failed}명`
+    } else {
+      resultEl.textContent = `오류: ${data.error}`
+    }
+  }
+
+  showSendingStatus('complete')
+  updateSendButtonState()
+  renderMembersList()
+}
+
+/**
  * 이벤트 핸들러 등록
  */
 export function attachHomeEvents() {
   // 컴포넌트 마운트 시 상태 초기화 (드롭다운 UI와 동기화)
   selectedPeriod = '1day'
+  selectedTemplate = null
   collectedMembers = []
   isCrawling = false
   isExploring = false
+  isSending = false
+  sendProgress = { current: 0, total: 0, todaySentCount: 0 }
+
+  // 템플릿 목록 로드
+  loadTemplates()
 
   // 탐색 기한 드롭다운 이벤트 등록
   document.getElementById('period-select')?.addEventListener('change', (e) => {
     selectedPeriod = e.target.value
     console.log('[Home] 탐색 기한 선택:', selectedPeriod)
+  })
+
+  // 템플릿 선택 이벤트
+  document.getElementById('template-select')?.addEventListener('change', (e) => {
+    const templateId = e.target.value
+    selectedTemplate = templateId ? templates.find(t => t.id === parseInt(templateId)) : null
+    updateSendButtonState()
+    console.log('[Home] 템플릿 선택:', selectedTemplate?.name)
   })
 
   // 탐색 시작 버튼 - 바로 크롤링 시작
@@ -400,37 +693,38 @@ export function attachHomeEvents() {
     }
   })
 
-  // 메시지 전송하기 버튼 - 네이버 로그인 창 열기
+  // 메시지 전송하기 버튼 - 로그인 확인 후 발송 시작
   document.getElementById('btn-send-message')?.addEventListener('click', async () => {
     if (collectedMembers.length === 0) {
       alert('수집된 회원이 없습니다. 탐색을 먼저 진행해주세요.')
       return
     }
 
-    console.log('[Home] 메시지 전송하기 클릭 - 로그인 창 열기')
+    if (!selectedTemplate) {
+      alert('템플릿을 선택해주세요.')
+      return
+    }
+
+    console.log('[Home] 메시지 전송하기 클릭')
 
     try {
-      const credentials = await window.api.accounts.getActiveCredentials()
-      if (!credentials) {
-        alert('활성화된 계정이 없습니다.')
+      // 로그인 상태 확인
+      const isLoggedIn = await window.api.naver.checkLogin()
+
+      if (!isLoggedIn) {
+        // 로그인 필요 - 로그인 플로우 시작
+        console.log('[Home] 로그인 필요 - 로그인 창 열기')
+        await startLoginFlow()
         return
       }
 
-      // 네이버 로그인 창 열기
-      await window.api.naver.openLogin()
-
-      // 자동 로그인 시도
-      setTimeout(async () => {
-        try {
-          await window.api.naver.autoLogin(credentials)
-        } catch (err) {
-          console.error('[Home] 자동 로그인 실패:', err)
-        }
-      }, 1500)
+      // 이미 로그인됨 - 바로 발송 시작
+      console.log('[Home] 이미 로그인됨 - 발송 시작')
+      await startSendingMessages()
 
     } catch (error) {
-      console.error('[Home] 로그인 창 열기 실패:', error)
-      alert('로그인 창을 열 수 없습니다: ' + error.message)
+      console.error('[Home] 메시지 전송 실패:', error)
+      alert('메시지 전송을 시작할 수 없습니다: ' + error.message)
     }
   })
 
@@ -487,6 +781,51 @@ export function attachHomeEvents() {
 
     showExploreStatus('complete')
     renderMembersList() // 버튼 활성화 상태 업데이트
+  })
+
+  // IPC 이벤트 리스너: 로그인 완료
+  window.api.naver.onLoginComplete((event, data) => {
+    console.log('[Home] 로그인 완료:', data)
+    if (data.success && selectedTemplate && collectedMembers.length > 0) {
+      // 로그인 성공 시 자동으로 발송 시작
+      console.log('[Home] 로그인 성공 - 자동 발송 시작')
+      startSendingMessages()
+    }
+  })
+
+  // IPC 이벤트 리스너: 메시지 발송 진행
+  window.api.naver.onSendProgress((event, data) => {
+    console.log('[Home] 발송 진행:', data)
+    updateSendProgressUI(data)
+  })
+
+  // IPC 이벤트 리스너: 메시지 발송 완료
+  window.api.naver.onSendComplete((event, data) => {
+    console.log('[Home] 발송 완료:', data)
+    handleSendComplete(data)
+  })
+
+  // 새로운 탐색 시작 버튼
+  document.getElementById('btn-new-search')?.addEventListener('click', () => {
+    // 상태 초기화
+    collectedMembers = []
+    selectedPeriod = '1day'
+    selectedTemplate = null
+    isSending = false
+    sendProgress = { current: 0, total: 0, todaySentCount: 0 }
+
+    // 드롭다운 초기화
+    const periodSelect = document.getElementById('period-select')
+    const templateSelect = document.getElementById('template-select')
+    if (periodSelect) periodSelect.value = '1day'
+    if (templateSelect) templateSelect.value = ''
+
+    // 발송 현황 배지 숨김
+    document.getElementById('send-count-badge')?.classList.add('hidden')
+
+    // 초기 화면으로 돌아가기
+    showExploreView(false)
+    renderMembersList()
   })
 }
 

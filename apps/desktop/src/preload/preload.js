@@ -52,9 +52,14 @@ contextBridge.exposeInMainWorld('api', {
     checkLogin: () => ipcRenderer.invoke('naver:checkLogin'),
     autoLogin: (credentials) => ipcRenderer.invoke('naver:autoLogin', credentials),
     startCrawling: (options) => ipcRenderer.invoke('naver:startCrawling', options),
+    // 쪽지 발송
+    startSending: (members, content) => ipcRenderer.invoke('naver:startSending', { members, content }),
     // 이벤트 리스너 (Main → Renderer)
     onLoginStatusChange: (callback) => ipcRenderer.on('naver:loginStatusChanged', callback),
     onCrawlProgress: (callback) => ipcRenderer.on('naver:crawlProgress', callback),
-    onCrawlComplete: (callback) => ipcRenderer.on('naver:crawlComplete', callback)
+    onCrawlComplete: (callback) => ipcRenderer.on('naver:crawlComplete', callback),
+    onLoginComplete: (callback) => ipcRenderer.on('naver:loginComplete', callback),
+    onSendProgress: (callback) => ipcRenderer.on('naver:sendProgress', callback),
+    onSendComplete: (callback) => ipcRenderer.on('naver:sendComplete', callback)
   }
 })
