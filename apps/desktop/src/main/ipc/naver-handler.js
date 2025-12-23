@@ -66,6 +66,182 @@ function closeLoginWindow() {
 }
 
 /**
+ * 쪽지 발송 폼 정보 조회
+ * @param {string} targetCafeMemberKey - 수신자 memberKey
+ * @returns {Promise<object>} { token, svcCode, svcType, todaySentCount, userId }
+ */
+async function getSendFormInfo(targetCafeMemberKey) {
+  const url = `https://note.naver.com/compose/sendForm.nhn?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`
+
+  try {
+    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
+    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+    const response = await fetch(url, {
+      headers: {
+        'Cookie': cookieString,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://cafe.naver.com/'
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error(`폼 조회 실패: ${response.status}`)
+    }
+
+    const html = await response.text()
+
+    // HTML에서 필요한 정보 추출
+    const tokenMatch = html.match(/name="token"\s+value="([^"]+)"/)
+    const svcCodeMatch = html.match(/name="svcCode"\s+value="([^"]+)"/)
+    const svcTypeMatch = html.match(/name="svcType"\s+value="([^"]+)"/)
+    const todaySentCountMatch = html.match(/name="todaySentCount"\s+value="([^"]+)"/)
+    const userIdMatch = html.match(/name="userId"\s+value="([^"]+)"/)
+
+    if (!tokenMatch) {
+      throw new Error('토큰을 찾을 수 없습니다')
+    }
+
+    return {
+      token: tokenMatch[1],
+      svcCode: svcCodeMatch ? svcCodeMatch[1] : '',
+      svcType: svcTypeMatch ? svcTypeMatch[1] : '2',
+      todaySentCount: todaySentCountMatch ? parseInt(todaySentCountMatch[1]) : 0,
+      userId: userIdMatch ? userIdMatch[1] : ''
+    }
+  } catch (error) {
+    console.error('[Naver] getSendFormInfo 실패:', error)
+    throw error
+  }
+}
+
+/**
+ * Captcha 생성 요청
+ * @param {string} targetCafeMemberKey - 수신자 memberKey
+ * @param {string} userId - 사용자 ID
+ * @returns {Promise<object>}
+ */
+async function createCaptcha(targetCafeMemberKey, userId) {
+  const url = 'https://note.naver.com/json/captcha/create/'
+
+  try {
+    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
+    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieString,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://note.naver.com/compose/sendForm.nhn?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`
+      },
+      body: `userId=${encodeURIComponent(userId)}`
+    })
+
+    if (!response.ok) {
+      throw new Error(`Captcha 생성 실패: ${response.status}`)
+    }
+
+    const data = await response.json()
+    console.log('[Naver] Captcha 생성 응답:', data)
+    return data
+  } catch (error) {
+    console.error('[Naver] createCaptcha 실패:', error)
+    throw error
+  }
+}
+
+/**
+ * 페이지 뷰 요청 (pv.jsp)
+ * @returns {Promise<void>}
+ */
+async function sendPageView() {
+  const timestamp = Date.now()
+  const url = `https://note.naver.com/pv/pv.jsp?_=${timestamp}`
+
+  try {
+    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
+    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Cookie': cookieString,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://note.naver.com/compose/sendForm.nhn',
+        'Accept': '*/*',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'script',
+        'Sec-Fetch-Mode': 'no-cors',
+        'Sec-Fetch-Site': 'same-origin'
+      }
+    })
+
+    console.log(`[Naver] 페이지 뷰 요청 완료: ${response.status}`)
+  } catch (error) {
+    // 페이지 뷰 실패는 무시 (발송에 영향 없음)
+    console.log('[Naver] 페이지 뷰 요청 실패 (무시):', error.message)
+  }
+}
+
+/**
+ * 쪽지 발송 API 호출
+ * @param {string} targetCafeMemberKey - 수신자 memberKey
+ * @param {string} content - 메시지 내용
+ * @param {object} formInfo - 폼 정보 { token, svcCode, svcType }
+ * @returns {Promise<object>} { success, error }
+ */
+async function sendMessage(targetCafeMemberKey, content, formInfo) {
+  const url = 'https://note.naver.com/json/write/send/'
+
+  try {
+    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
+    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+    // 폼 데이터 구성
+    const formData = new URLSearchParams()
+    formData.append('token', formInfo.token)
+    formData.append('svcCode', formInfo.svcCode)
+    formData.append('svcType', formInfo.svcType)
+    formData.append('targetCafeMemberKey', targetCafeMemberKey)
+    formData.append('content', content)
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieString,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://note.naver.com/compose/sendForm.nhn?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`,
+        'Origin': 'https://note.naver.com'
+      },
+      body: formData.toString()
+    })
+
+    if (!response.ok) {
+      throw new Error(`API 응답 오류: ${response.status}`)
+    }
+
+    const data = await response.json()
+    console.log('[Naver] 쪽지 발송 응답:', data)
+
+    // 응답 확인 (resultCode가 SUCCESS인 경우 성공)
+    if (data.resultCode === 'SUCCESS' || data.result === 'success') {
+      return { success: true }
+    } else {
+      return { success: false, error: data.resultMessage || data.message || '발송 실패' }
+    }
+  } catch (error) {
+    console.error('[Naver] sendMessage 실패:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+/**
  * 로그인 상태 확인 (쿠키 기반)
  */
 async function checkLoginStatus() {
@@ -159,159 +335,6 @@ function extractMembers(articles) {
   }
 
   return members
-}
-
-/**
- * 쪽지 전송 폼 정보 조회 - token, svcCode, svcType, todaySentCount 추출
- * @param {string} targetCafeMemberKey - 수신자 memberKey
- * @returns {object} { success, token, svcCode, svcType, todaySentCount, error }
- */
-async function getSendFormInfo(targetCafeMemberKey) {
-  try {
-    // 네이버 쿠키 가져오기
-    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
-    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
-
-    const url = `https://note.naver.com/note/sendForm.nhn?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Host': 'note.naver.com',
-        'Connection': 'keep-alive',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ko,en;q=0.9,en-US;q=0.8',
-        'Cookie': cookieString
-      }
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP 오류: ${response.status}`)
-    }
-
-    const html = await response.text()
-
-    // HTML에서 oNote 객체 추출 (정규식으로 JSON 파싱)
-    // 형식: var oNote = $Json({...}).toObject();
-    const jsonMatch = html.match(/var\s+oNote\s*=\s*\$Json\((\{[\s\S]*?\})\)\.toObject\(\)/)
-
-    if (!jsonMatch || !jsonMatch[1]) {
-      console.error('[Naver] oNote 객체를 찾을 수 없습니다')
-      return {
-        success: false,
-        error: 'oNote 객체를 찾을 수 없습니다'
-      }
-    }
-
-    const oNote = JSON.parse(jsonMatch[1])
-    console.log('[Naver] getSendFormInfo 성공:', {
-      todaySentCount: oNote.todaySentCount,
-      token: oNote.token?.substring(0, 20) + '...',
-      svcCode: oNote.svcCode,
-      svcType: oNote.svcType
-    })
-
-    return {
-      success: true,
-      token: oNote.token,
-      svcCode: oNote.svcCode,
-      svcType: oNote.svcType,
-      todaySentCount: oNote.todaySentCount,
-      sendLimit: oNote.sendLimit || 50
-    }
-
-  } catch (error) {
-    console.error('[Naver] getSendFormInfo 실패:', error)
-    return {
-      success: false,
-      error: error.message
-    }
-  }
-}
-
-/**
- * 쪽지 발송 API 호출
- * @param {string} targetCafeMemberKey - 수신자 memberKey
- * @param {string} content - 메시지 내용
- * @param {object} formInfo - getSendFormInfo에서 받은 정보 (token, svcCode, svcType)
- * @returns {object} { success, todaySentCount, error }
- */
-async function sendMessage(targetCafeMemberKey, content, formInfo = {}) {
-  try {
-    // 네이버 쿠키 가져오기
-    const cookies = await session.defaultSession.cookies.get({ domain: '.naver.com' })
-    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
-
-    // formInfo에서 값 추출 (getSendFormInfo에서 받은 값 사용)
-    const { token = '', svcCode = '', svcType = '2' } = formInfo
-
-    // URL 인코딩된 폼 데이터 생성
-    const formData = new URLSearchParams()
-    formData.append('svcType', String(svcType))
-    formData.append('svcId', '')
-    formData.append('svcName', '')
-    formData.append('isReplyNote', '1')
-    formData.append('targetUserId', '')
-    formData.append('targetCafeMemberKey', targetCafeMemberKey)
-    formData.append('content', content)
-    formData.append('isBackup', '1')
-    formData.append('svcCode', String(svcCode))
-    formData.append('token', token)
-
-    const response = await fetch('https://note.naver.com/json/write/send/', {
-      method: 'POST',
-      headers: {
-        'Host': 'note.naver.com',
-        'Connection': 'keep-alive',
-        'sec-ch-ua-platform': '"Windows"',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-        'sec-ch-ua': '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'charset': 'utf-8',
-        'sec-ch-ua-mobile': '?0',
-        'Accept': '*/*',
-        'Origin': 'https://note.naver.com',
-        'Sec-Fetch-Site': 'same-origin',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Dest': 'empty',
-        'Referer': `https://note.naver.com/note/sendForm.nhn?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`,
-        'Accept-Encoding': 'gzip, deflate, br, zstd',
-        'Accept-Language': 'ko,en;q=0.9,en-US;q=0.8',
-        'Cookie': cookieString
-      },
-      body: formData.toString()
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP 오류: ${response.status}`)
-    }
-
-    const data = await response.json()
-    console.log('[Naver] 쪽지 발송 응답:', data)
-
-    // 응답 구조: { Message, status, todaySentCount, ... }
-    if (data.status === 'success' || data.Result === 'OK') {
-      return {
-        success: true,
-        todaySentCount: data.todaySentCount || 0,
-        message: data.Message
-      }
-    } else {
-      return {
-        success: false,
-        todaySentCount: data.todaySentCount || 0,
-        error: data.Message || '발송 실패'
-      }
-    }
-
-  } catch (error) {
-    console.error('[Naver] 쪽지 발송 실패:', error)
-    return {
-      success: false,
-      error: error.message
-    }
-  }
 }
 
 /**
@@ -603,7 +626,7 @@ function register(ipcMain, mainWindowGetter, store) {
     }
   })
 
-  // 대량 쪽지 발송 시작
+  // 대량 쪽지 발송 시작 (API 기반)
   ipcMain.handle('naver:startSending', async (event, { members, content }) => {
     try {
       const isLoggedIn = await checkLoginStatus()
@@ -615,105 +638,88 @@ function register(ipcMain, mainWindowGetter, store) {
         throw new Error('발송할 회원이 없습니다')
       }
 
-      console.log(`[Naver] 대량 발송 시작: ${members.length}명, 내용 길이: ${content.length}자`)
+      console.log(`[Naver] 대량 발송 시작 (API): ${members.length}명, 내용 길이: ${content.length}자`)
 
-      // 첫 번째 회원으로 초기 정보 조회 (todaySentCount 확인)
+      // 첫 번째 회원으로 초기 폼 정보 조회 (todaySentCount 확인용)
       const initialFormInfo = await getSendFormInfo(members[0].memberKey)
-      if (!initialFormInfo.success) {
-        throw new Error(`폼 정보 조회 실패: ${initialFormInfo.error}`)
-      }
+      console.log(`[Naver] 오늘 발송 건수: ${initialFormInfo.todaySentCount}건`)
 
       const results = {
         success: 0,
-        failed: 0,
-        todaySentCount: initialFormInfo.todaySentCount || 0
+        failed: 0
       }
 
-      // 초기 todaySentCount를 UI에 전송
+      // 초기 상태를 UI에 전송
       getMainWindowRef()?.webContents.send('naver:sendProgress', {
         current: 0,
         total: members.length,
         member: null,
-        todaySentCount: results.todaySentCount,
-        initialInfo: true
+        initialInfo: true,
+        todaySentCount: initialFormInfo.todaySentCount
       })
-
-      console.log(`[Naver] 오늘 발송한 쪽지: ${results.todaySentCount}건`)
 
       const total = members.length
 
       for (let i = 0; i < members.length; i++) {
         const member = members[i]
 
-        // 발송 한도 체크 (50건 초과 시 중단)
-        if (results.todaySentCount >= 50) {
-          console.log('[Naver] 일일 발송 한도 도달 (50건)')
-          getMainWindowRef()?.webContents.send('naver:sendProgress', {
-            current: i,
-            total: total,
-            member: member,
-            todaySentCount: results.todaySentCount,
-            limitReached: true
-          })
-          break
-        }
+        console.log(`[Naver] 발송 중 (${i + 1}/${total}): ${member.nickName}`)
 
-        // 매 발송 전에 폼 정보 조회 (token은 매번 갱신 필요)
-        const formInfo = await getSendFormInfo(member.memberKey)
-        if (!formInfo.success) {
-          console.error(`[Naver] 폼 정보 조회 실패 (${member.nickName}): ${formInfo.error}`)
-          results.failed++
-          getMainWindowRef()?.webContents.send('naver:sendProgress', {
-            current: i + 1,
-            total: total,
-            member: member,
-            memberKey: member.memberKey,
-            success: false,
-            error: formInfo.error,
-            todaySentCount: results.todaySentCount
-          })
-          continue
-        }
+        try {
+          // 1. 폼 정보 조회 (각 회원마다 새 토큰 획득)
+          const formInfo = await getSendFormInfo(member.memberKey)
 
-        // todaySentCount 업데이트 (폼 정보에서 가져온 값이 더 정확)
-        results.todaySentCount = formInfo.todaySentCount
+          // 2. 페이지 뷰 요청
+          await sendPageView()
 
-        // 쪽지 발송 (폼 정보 전달)
-        const result = await sendMessage(member.memberKey, content, {
-          token: formInfo.token,
-          svcCode: formInfo.svcCode,
-          svcType: formInfo.svcType
-        })
+          // 3. Captcha 생성 요청
+          await createCaptcha(member.memberKey, formInfo.userId)
 
-        if (result.success) {
-          results.success++
-          results.todaySentCount = result.todaySentCount
+          // 4. 쪽지 발송
+          const result = await sendMessage(member.memberKey, content, formInfo)
 
-          // 발송 완료 회원 DB에 저장
-          try {
-            store.create('members', {
-              cafe_id: member.cafeId || null,
-              nickname: member.nickName,
-              member_key: member.memberKey
+          if (result.success) {
+            results.success++
+
+            // 발송 완료 회원 DB에 저장
+            try {
+              store.create('members', {
+                cafe_id: member.cafeId || null,
+                nickname: member.nickName,
+                member_key: member.memberKey
+              })
+              console.log(`[Naver] 회원 DB 저장 완료: ${member.nickName}`)
+            } catch (dbError) {
+              // 중복 회원 등 DB 오류는 무시 (이미 저장된 경우)
+              console.log(`[Naver] 회원 DB 저장 스킵: ${member.nickName} (${dbError.message})`)
+            }
+
+            // 진행 상황 전송 (성공)
+            getMainWindowRef()?.webContents.send('naver:sendProgress', {
+              current: i + 1,
+              total: total,
+              member: member,
+              memberKey: member.memberKey,
+              success: true
             })
-            console.log(`[Naver] 회원 DB 저장 완료: ${member.nickName}`)
-          } catch (dbError) {
-            // 중복 회원 등 DB 오류는 무시 (이미 저장된 경우)
-            console.log(`[Naver] 회원 DB 저장 스킵: ${member.nickName} (${dbError.message})`)
+
+          } else {
+            results.failed++
+
+            // 진행 상황 전송 (실패)
+            getMainWindowRef()?.webContents.send('naver:sendProgress', {
+              current: i + 1,
+              total: total,
+              member: member,
+              memberKey: member.memberKey,
+              success: false,
+              error: result.error
+            })
           }
 
-          // 진행 상황 전송 (성공)
-          getMainWindowRef()?.webContents.send('naver:sendProgress', {
-            current: i + 1,
-            total: total,
-            member: member,
-            memberKey: member.memberKey,
-            success: true,
-            todaySentCount: result.todaySentCount
-          })
-
-        } else {
+        } catch (memberError) {
           results.failed++
+          console.error(`[Naver] ${member.nickName} 발송 실패:`, memberError.message)
 
           // 진행 상황 전송 (실패)
           getMainWindowRef()?.webContents.send('naver:sendProgress', {
@@ -722,14 +728,15 @@ function register(ipcMain, mainWindowGetter, store) {
             member: member,
             memberKey: member.memberKey,
             success: false,
-            error: result.error,
-            todaySentCount: results.todaySentCount
+            error: memberError.message
           })
         }
 
-        // Rate limiting - 1초 간격 (네이버 서버 부하 방지)
+        // Rate limiting - 1~2초 랜덤 간격
         if (i < members.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          const delay = 1000 + Math.random() * 1000
+          console.log(`[Naver] 다음 발송까지 ${Math.round(delay)}ms 대기`)
+          await new Promise(resolve => setTimeout(resolve, delay))
         }
       }
 
@@ -774,7 +781,7 @@ function register(ipcMain, mainWindowGetter, store) {
     return { success: true }
   })
 
-  console.log('[IPC] Naver handlers registered (BrowserWindow mode)')
+  console.log('[IPC] Naver handlers registered (API mode)')
 }
 
 module.exports = {
