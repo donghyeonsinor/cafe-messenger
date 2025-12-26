@@ -31,6 +31,7 @@ export function createAccountManager() {
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">계정명</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">네이버 ID</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">비밀번호</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">발송 현황</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">등록일</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
             </tr>
@@ -119,7 +120,11 @@ async function renderAccountsTable() {
 
   noAccounts?.classList.add('hidden')
 
-  tbody.innerHTML = accounts.map(account => `
+  tbody.innerHTML = accounts.map(account => {
+    const sentCount = account.today_sent_count || 0
+    const badgeClass = getSentCountBadgeClass(sentCount)
+
+    return `
     <tr class="hover:bg-gray-50">
       <td class="px-6 py-4 whitespace-nowrap">
         <input
@@ -140,6 +145,9 @@ async function renderAccountsTable() {
         <div class="text-gray-500">********</div>
       </td>
       <td class="px-6 py-4 whitespace-nowrap">
+        <span class="${badgeClass}">${sentCount}/50</span>
+      </td>
+      <td class="px-6 py-4 whitespace-nowrap">
         <div class="text-sm text-gray-500">${formatDate(account.created_at)}</div>
       </td>
       <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
@@ -151,7 +159,7 @@ async function renderAccountsTable() {
         </button>
       </td>
     </tr>
-  `).join('')
+  `}).join('')
 
   // 활성 계정 변경 이벤트
   document.querySelectorAll('input[name="active-account"]').forEach(radio => {
@@ -269,4 +277,23 @@ function formatDate(dateString) {
 function showToast(message, type = 'info') {
   // 간단한 토스트 알림 (추후 개선 가능)
   alert(message)
+}
+
+/**
+ * 발송 현황에 따른 배지 클래스 반환
+ * @param {number} count - 오늘 발송 수
+ * @returns {string} TailwindCSS 클래스
+ */
+function getSentCountBadgeClass(count) {
+  const baseClass = 'px-2 py-1 text-xs font-medium rounded-full'
+
+  if (count >= 50) {
+    return `${baseClass} bg-red-100 text-red-800`
+  } else if (count >= 40) {
+    return `${baseClass} bg-orange-100 text-orange-800`
+  } else if (count >= 30) {
+    return `${baseClass} bg-yellow-100 text-yellow-800`
+  } else {
+    return `${baseClass} bg-green-100 text-green-800`
+  }
 }

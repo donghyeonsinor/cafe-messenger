@@ -80,6 +80,9 @@ app.whenReady().then(() => {
     try {
       store.initialize()
       console.log('[Main] Store initialized')
+
+      // 일일 발송 카운트 리셋 (날짜가 지난 계정 초기화)
+      store.resetDailySentCount()
     } catch (error) {
       console.error('[Main] Store initialization failed:', error)
       // DB 없이도 앱은 실행 (기능 제한됨)

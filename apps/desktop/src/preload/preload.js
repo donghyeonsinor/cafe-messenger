@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld('api', {
     onCrawlComplete: (callback) => ipcRenderer.on('naver:crawlComplete', callback),
     onLoginComplete: (callback) => ipcRenderer.on('naver:loginComplete', callback),
     onSendProgress: (callback) => ipcRenderer.on('naver:sendProgress', callback),
-    onSendComplete: (callback) => ipcRenderer.on('naver:sendComplete', callback)
+    onSendComplete: (callback) => ipcRenderer.on('naver:sendComplete', callback),
+    // 이벤트 리스너 제거 (cleanup용)
+    removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
   }
 })

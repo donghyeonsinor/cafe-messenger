@@ -744,6 +744,13 @@ export function attachHomeEvents() {
     }
   })
 
+  // IPC 이벤트 리스너 등록 전 기존 리스너 제거 (중복 방지)
+  window.api.naver.removeAllListeners('naver:crawlProgress')
+  window.api.naver.removeAllListeners('naver:crawlComplete')
+  window.api.naver.removeAllListeners('naver:loginComplete')
+  window.api.naver.removeAllListeners('naver:sendProgress')
+  window.api.naver.removeAllListeners('naver:sendComplete')
+
   // IPC 이벤트 리스너: 크롤링 진행
   window.api.naver.onCrawlProgress((event, data) => {
     console.log('[Home] 크롤링 진행:', data)
@@ -784,12 +791,16 @@ export function attachHomeEvents() {
   })
 
   // IPC 이벤트 리스너: 로그인 완료
+  console.log('[Home] onLoginComplete 이벤트 리스너 등록')
   window.api.naver.onLoginComplete((event, data) => {
-    console.log('[Home] 로그인 완료:', data)
+    console.log('[Home] 로그인 완료 이벤트 수신:', data)
+    console.log('[Home] 현재 상태 - selectedTemplate:', !!selectedTemplate, ', collectedMembers:', collectedMembers.length)
     if (data.success && selectedTemplate && collectedMembers.length > 0) {
       // 로그인 성공 시 자동으로 발송 시작
       console.log('[Home] 로그인 성공 - 자동 발송 시작')
       startSendingMessages()
+    } else {
+      console.log('[Home] 발송 조건 미충족 - 발송 시작 안함')
     }
   })
 

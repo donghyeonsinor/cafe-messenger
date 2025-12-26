@@ -146,6 +146,12 @@ class DataStore {
     // members 테이블에 member_key 컬럼 추가 (없는 경우)
     this.addColumnIfNotExists('members', 'member_key', 'TEXT')
 
+    // accounts 테이블에 today_sent_count 컬럼 추가 (없는 경우)
+    this.addColumnIfNotExists('accounts', 'today_sent_count', 'INTEGER DEFAULT 0')
+
+    // accounts 테이블에 sent_count_date 컬럼 추가 (없는 경우)
+    this.addColumnIfNotExists('accounts', 'sent_count_date', 'TEXT')
+
     console.log('[Store] Migrations completed')
   }
 
@@ -323,6 +329,74 @@ class DataStore {
       this.initialized = false
       console.log('[Store] Database closed')
     }
+  }
+
+  /**
+   * 일일 발송 카운트 리셋
+   * 날짜가 바뀐 계정의 today_sent_count를 0으로 초기화
+   */
+  resetDailySentCount() {
+    this.ensureInitialized()
+
+    // 오늘 날짜 (YYYY-MM-DD 형식)
+    const today = new Date().toISOString().split('T')[0]
+
+    // sent_count_date가 오늘과 다른 계정들 업데이트
+    const stmt = this.db.prepare(`
+      UPDATE accounts
+      SET today_sent_count = 0, sent_count_date = @today, updated_at = @updatedAt
+      WHERE sent_count_date IS NULL OR sent_count_date != @today
+    `)
+
+    const result = stmt.run({
+      today,
+      updatedAt: new Date().toISOString()
+    })
+
+    if (result.changes > 0) {
+      console.log(`[Store] Reset daily sent count for ${result.changes} account(s)`)
+    } else {
+      console.log('[Store] No accounts needed daily reset')
+    }
+
+    return result.changes
+  }
+
+  /**
+   * 계정의 일일 발송 카운트 증가
+   * @param {number} accountId - 계정 ID
+   * @returns {object|null} 업데이트된 계정 정보
+   */
+  incrementSentCount(accountId) {
+    this.ensureInitialized()
+
+    const today = new Date().toISOString().split('T')[0]
+
+    // 기존 계정 조회
+    const account = this.getById('accounts', accountId)
+    if (!account) return null
+
+    if (account.sent_count_date !== today) {
+      // 날짜가 바뀌었으면 카운트 리셋 후 1로 설정
+      const stmt = this.db.prepare(`
+        UPDATE accounts
+        SET today_sent_count = 1, sent_count_date = @today, updated_at = @updatedAt
+        WHERE id = @id
+      `)
+      stmt.run({ id: accountId, today, updatedAt: new Date().toISOString() })
+      console.log(`[Store] 계정 ${accountId} 일일 발송 카운트 리셋 및 1로 설정 (날짜 변경)`)
+    } else {
+      // 같은 날이면 카운트 증가
+      const stmt = this.db.prepare(`
+        UPDATE accounts
+        SET today_sent_count = today_sent_count + 1, updated_at = @updatedAt
+        WHERE id = @id
+      `)
+      stmt.run({ id: accountId, updatedAt: new Date().toISOString() })
+      console.log(`[Store] 계정 ${accountId} 일일 발송 카운트 증가: ${account.today_sent_count + 1}`)
+    }
+
+    return this.getById('accounts', accountId)
   }
 }
 

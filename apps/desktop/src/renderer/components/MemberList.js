@@ -9,9 +9,9 @@ let selectedCafeId = null
  */
 export function createMemberList() {
   return `
-    <div class="max-w-6xl mx-auto">
+    <div class="h-full flex flex-col overflow-hidden">
       <!-- 헤더 -->
-      <div class="flex justify-between items-center mb-6">
+      <div class="flex justify-between items-center mb-4">
         <div>
           <h2 class="text-3xl font-bold text-gray-800">회원 관리</h2>
           <p class="text-gray-600 mt-1">쪽지 수신자를 관리합니다</p>
@@ -25,7 +25,7 @@ export function createMemberList() {
       </div>
 
       <!-- 필터 및 검색 -->
-      <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+      <div class="bg-white rounded-lg shadow-md p-4 mb-4">
         <div class="flex space-x-4">
           <div class="flex-1">
             <label class="block text-sm font-medium text-gray-700 mb-2">카페 선택</label>
@@ -49,22 +49,28 @@ export function createMemberList() {
         </div>
       </div>
 
-      <!-- 회원 목록 테이블 -->
-      <div class="bg-white rounded-lg shadow-md overflow-hidden">
-        <table class="w-full">
+      <!-- 회원 목록 테이블 (스크롤 가능) -->
+      <div class="flex-1 bg-white rounded-lg shadow-md flex flex-col min-h-0 overflow-hidden">
+        <!-- 테이블 헤더 (고정) -->
+        <table class="w-full table-fixed">
           <thead class="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">카페</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">닉네임</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">사용자 ID</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">등록일</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+              <th class="w-1/5 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">카페</th>
+              <th class="w-1/5 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">닉네임</th>
+              <th class="w-1/5 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">사용자 ID</th>
+              <th class="w-1/5 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">등록일</th>
+              <th class="w-1/5 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
             </tr>
           </thead>
-          <tbody id="members-table-body" class="bg-white divide-y divide-gray-200">
-            <!-- 동적으로 채워짐 -->
-          </tbody>
         </table>
+        <!-- 테이블 본문 (스크롤) -->
+        <div class="flex-1 overflow-y-auto min-h-0">
+          <table class="w-full table-fixed">
+            <tbody id="members-table-body" class="bg-white divide-y divide-gray-200">
+              <!-- 동적으로 채워짐 -->
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 회원이 없을 때 -->
@@ -153,19 +159,19 @@ async function renderMembersTable() {
     const cafe = cafes.find(c => c.id === member.cafe_id)
     return `
       <tr class="hover:bg-gray-50">
-        <td class="px-6 py-4 whitespace-nowrap">
-          <div class="text-sm font-medium text-gray-900">${cafe ? escapeHtml(cafe.cafe_name) : '-'}</div>
+        <td class="w-1/5 px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
+          <div class="text-sm font-medium text-gray-900 truncate">${cafe ? escapeHtml(cafe.cafe_name) : '-'}</div>
         </td>
-        <td class="px-6 py-4 whitespace-nowrap">
-          <div class="font-medium text-gray-900">${escapeHtml(member.nickname)}</div>
+        <td class="w-1/5 px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
+          <div class="font-medium text-gray-900 truncate">${escapeHtml(member.nickname)}</div>
         </td>
-        <td class="px-6 py-4 whitespace-nowrap">
-          <div class="text-sm text-gray-500">${member.user_id || '-'}</div>
+        <td class="w-1/5 px-6 py-4 whitespace-nowrap overflow-hidden text-ellipsis">
+          <div class="text-sm text-gray-500 truncate">${member.user_id || '-'}</div>
         </td>
-        <td class="px-6 py-4 whitespace-nowrap">
+        <td class="w-1/5 px-6 py-4 whitespace-nowrap">
           <div class="text-sm text-gray-500">${formatDate(member.created_at)}</div>
         </td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+        <td class="w-1/5 px-6 py-4 whitespace-nowrap text-sm font-medium">
           <button
             class="btn-delete-member text-red-600 hover:text-red-900"
             data-id="${member.id}"
