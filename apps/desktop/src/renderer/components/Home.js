@@ -129,9 +129,28 @@ export function createHome() {
                 </div>
                 <p id="sending-progress-text" class="text-sm text-gray-600">0 / 0 명 발송 완료</p>
 
+                <!-- 중지하기 버튼 -->
+                <button
+                  id="btn-stop-sending"
+                  class="mt-4 px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
+                >
+                  ⏹️ 중지하기
+                </button>
+
                 <!-- 오늘 발송 제한 경고 -->
                 <div id="send-limit-warning" class="hidden mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
                   ⚠️ 오늘 발송 한도(50건)에 도달했습니다.
+                </div>
+
+                <!-- CAPTCHA 입력 필요 알림 -->
+                <div id="captcha-alert" class="hidden mt-4 p-4 bg-orange-100 border border-orange-400 rounded-lg">
+                  <div class="flex items-center">
+                    <span class="text-2xl mr-3">⚠️</span>
+                    <div>
+                      <p class="font-semibold text-orange-800">CAPTCHA 입력 필요</p>
+                      <p class="text-sm text-orange-700">쪽지 발송 창에서 보안문자를 입력해주세요.</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -610,10 +629,19 @@ function handleSendComplete(data) {
   isSending = false
 
   const resultEl = document.getElementById('sending-result')
+  const completeIcon = document.querySelector('#sending-complete .text-6xl')
+
   if (resultEl) {
     if (data.success) {
       const { results } = data
       resultEl.textContent = `성공: ${results.success}명, 실패: ${results.failed}명`
+    } else if (data.cancelled) {
+      // 사용자가 중지한 경우
+      const { results } = data
+      resultEl.textContent = `발송 중지됨 - 성공: ${results.success}명, 실패: ${results.failed}명`
+      if (completeIcon) {
+        completeIcon.textContent = '⏹️'
+      }
     } else {
       resultEl.textContent = `오류: ${data.error}`
     }
@@ -750,6 +778,8 @@ export function attachHomeEvents() {
   window.api.naver.removeAllListeners('naver:loginComplete')
   window.api.naver.removeAllListeners('naver:sendProgress')
   window.api.naver.removeAllListeners('naver:sendComplete')
+  window.api.naver.removeAllListeners('naver:captchaRequired')
+  window.api.naver.removeAllListeners('naver:captchaResolved')
 
   // IPC 이벤트 리스너: 크롤링 진행
   window.api.naver.onCrawlProgress((event, data) => {
@@ -816,6 +846,35 @@ export function attachHomeEvents() {
     handleSendComplete(data)
   })
 
+  // IPC 이벤트 리스너: CAPTCHA 감지됨
+  window.api.naver.onCaptchaRequired((event, data) => {
+    console.log('[Home] CAPTCHA 감지됨:', data)
+    document.getElementById('captcha-alert')?.classList.remove('hidden')
+  })
+
+  // IPC 이벤트 리스너: CAPTCHA 해결됨
+  window.api.naver.onCaptchaResolved((event, data) => {
+    console.log('[Home] CAPTCHA 해결됨:', data)
+    document.getElementById('captcha-alert')?.classList.add('hidden')
+  })
+
+  // 중지하기 버튼
+  document.getElementById('btn-stop-sending')?.addEventListener('click', async () => {
+    if (!isSending) return
+
+    // 중지 확인
+    if (!confirm('정말 메시지 발송을 중지하시겠습니까?\n이미 발송된 메시지는 취소되지 않습니다.')) {
+      return
+    }
+
+    console.log('[Home] 발송 중지 요청')
+    try {
+      await window.api.naver.stopSending()
+    } catch (error) {
+      console.error('[Home] 발송 중지 실패:', error)
+    }
+  })
+
   // 새로운 탐색 시작 버튼
   document.getElementById('btn-new-search')?.addEventListener('click', () => {
     // 상태 초기화
@@ -838,6 +897,39 @@ export function attachHomeEvents() {
     showExploreView(false)
     renderMembersList()
   })
+}
+
+/**
+ * 발송 중 상태 확인 함수 (다른 컴포넌트에서 사용)
+ * @returns {boolean} 발송 중 여부
+ */
+export function isCurrentlySending() {
+  return isSending
+}
+
+/**
+ * 탭 이동 전 확인 (발송 중일 때 중지 여부 확인)
+ * @returns {Promise<boolean>} 이동 가능 여부
+ */
+export async function confirmTabChange() {
+  if (!isSending) {
+    return true
+  }
+
+  // 발송 중일 때 확인
+  const shouldStop = confirm('메시지 발송이 진행 중입니다.\n발송을 중지하고 다른 탭으로 이동하시겠습니까?')
+
+  if (shouldStop) {
+    try {
+      await window.api.naver.stopSending()
+      return true
+    } catch (error) {
+      console.error('[Home] 발송 중지 실패:', error)
+      return false
+    }
+  }
+
+  return false
 }
 
 // 유틸리티 함수

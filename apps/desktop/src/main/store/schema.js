@@ -9,6 +9,8 @@ const SCHEMAS = {
       naver_id TEXT NOT NULL UNIQUE,
       naver_password TEXT NOT NULL,
       is_active INTEGER DEFAULT 0,
+      today_sent_count INTEGER DEFAULT 0,
+      sent_count_date TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT
     )
@@ -51,7 +53,7 @@ const SCHEMAS = {
 
 // 테이블별 컬럼 목록 (INSERT 시 사용)
 const TABLE_COLUMNS = {
-  accounts: ['account_name', 'naver_id', 'naver_password', 'is_active'],
+  accounts: ['account_name', 'naver_id', 'naver_password', 'is_active', 'today_sent_count', 'sent_count_date'],
   cafes: ['cafe_name', 'cafe_url', 'cafe_id', 'is_active'],
   templates: ['name', 'content'],
   members: ['cafe_id', 'nickname', 'member_key', 'write_date']

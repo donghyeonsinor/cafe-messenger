@@ -398,6 +398,28 @@ class DataStore {
 
     return this.getById('accounts', accountId)
   }
+
+  /**
+   * 계정의 일일 발송 카운트를 특정 값으로 설정 (네이버 서버 값으로 동기화)
+   * @param {number} accountId - 계정 ID
+   * @param {number} count - 발송 건수
+   * @returns {object|null} 업데이트된 계정 정보
+   */
+  setSentCount(accountId, count) {
+    this.ensureInitialized()
+
+    const today = new Date().toISOString().split('T')[0]
+
+    const stmt = this.db.prepare(`
+      UPDATE accounts
+      SET today_sent_count = @count, sent_count_date = @today, updated_at = @updatedAt
+      WHERE id = @id
+    `)
+    stmt.run({ id: accountId, count, today, updatedAt: new Date().toISOString() })
+    console.log(`[Store] 계정 ${accountId} 발송 현황 동기화: ${count}건`)
+
+    return this.getById('accounts', accountId)
+  }
 }
 
 // 싱글톤 인스턴스
