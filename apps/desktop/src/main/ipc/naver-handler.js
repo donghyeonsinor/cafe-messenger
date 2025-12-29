@@ -8,6 +8,9 @@ let loginWindow = null
 let messageWindow = null
 let getMainWindow = null // 함수로 변경
 
+// 발송 중지 플래그
+let isSendingCancelled = false
+
 // 네이버 URL
 const NAVER_LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
 const NOTE_SEND_URL = 'https://note.naver.com/note/sendForm.nhn'
@@ -756,9 +759,23 @@ function register(ipcMain, mainWindowGetter, store) {
     }
   })
 
+  // 발송 중지
+  ipcMain.handle('naver:stopSending', async () => {
+    console.log('[Naver] 발송 중지 요청 수신')
+    isSendingCancelled = true
+
+    // 메시지 윈도우 닫기
+    closeMessageWindow()
+
+    return { success: true }
+  })
+
   // 대량 쪽지 발송 시작 (BrowserWindow 기반)
   ipcMain.handle('naver:startSending', async (event, { members, content }) => {
     try {
+      // 발송 시작 시 취소 플래그 초기화
+      isSendingCancelled = false
+
       const isLoggedIn = await checkLoginStatus()
       if (!isLoggedIn) {
         throw new Error('로그인이 필요합니다')
@@ -800,6 +817,13 @@ function register(ipcMain, mainWindowGetter, store) {
         currentTodaySentCount = initCheck.count
         console.log(`[Naver] 초기 todaySentCount: ${currentTodaySentCount}건`)
 
+        // 초기 조회 시에도 DB 동기화
+        const activeAccount = store.findOne('accounts', { is_active: 1 })
+        if (activeAccount) {
+          store.setSentCount(activeAccount.id, currentTodaySentCount)
+          console.log(`[Naver] 계정 발송 현황 초기 동기화: ${activeAccount.account_name} → ${currentTodaySentCount}건`)
+        }
+
         // 초기 조회 후 창 닫기
         closeMessageWindow()
 
@@ -839,6 +863,24 @@ function register(ipcMain, mainWindowGetter, store) {
       const total = members.length
 
       for (let i = 0; i < members.length; i++) {
+        // 발송 중지 요청 확인
+        if (isSendingCancelled) {
+          console.log(`[Naver] 발송 중지됨 - ${i}/${total} 완료`)
+
+          // 메시지 윈도우 닫기
+          closeMessageWindow()
+
+          // 발송 중지 이벤트 전송
+          getMainWindowRef()?.webContents.send('naver:sendComplete', {
+            success: false,
+            error: '사용자가 발송을 중지했습니다',
+            cancelled: true,
+            results: results
+          })
+
+          return { success: false, cancelled: true, results }
+        }
+
         const member = members[i]
 
         console.log(`[Naver] 발송 중 (${i + 1}/${total}): ${member.nickName}`)
@@ -854,11 +896,11 @@ function register(ipcMain, mainWindowGetter, store) {
             currentTodaySentCount = result.todaySentCount
           }
 
-          // 활성 계정의 발송 카운트 증가 (DB 저장)
+          // 활성 계정의 발송 카운트 동기화 (네이버 서버 값으로 DB 저장)
           const activeAccount = store.findOne('accounts', { is_active: 1 })
-          if (activeAccount) {
-            store.incrementSentCount(activeAccount.id)
-            console.log(`[Naver] 계정 발송 카운트 증가: ${activeAccount.account_name}`)
+          if (activeAccount && currentTodaySentCount !== undefined) {
+            store.setSentCount(activeAccount.id, currentTodaySentCount)
+            console.log(`[Naver] 계정 발송 현황 동기화: ${activeAccount.account_name} → ${currentTodaySentCount}건`)
           }
 
           // 발송 완료 회원 DB에 저장

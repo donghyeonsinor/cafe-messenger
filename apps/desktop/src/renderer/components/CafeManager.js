@@ -27,12 +27,10 @@ export function createCafeManager() {
         <table class="w-full">
           <thead class="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">활성</th>
+              <th class="w-16 px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">활성</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">카페명</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">카페 URL</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">카페 ID</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">등록일</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+              <th class="w-24 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
             </tr>
           </thead>
           <tbody id="cafes-table-body" class="bg-white divide-y divide-gray-200">
@@ -62,7 +60,7 @@ export function createCafeManager() {
                 required
               />
             </div>
-            <div class="mb-4">
+            <div class="mb-6">
               <label class="block text-sm font-medium text-gray-700 mb-2">카페 URL</label>
               <input
                 type="url"
@@ -72,16 +70,6 @@ export function createCafeManager() {
                 required
               />
               <p class="text-xs text-gray-500 mt-1">전체 URL을 입력하세요</p>
-            </div>
-            <div class="mb-6">
-              <label class="block text-sm font-medium text-gray-700 mb-2">카페 ID (선택)</label>
-              <input
-                type="text"
-                id="input-cafe-id"
-                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="예: mycafe123"
-              />
-              <p class="text-xs text-gray-500 mt-1">URL에서 카페 고유 ID (선택사항)</p>
             </div>
             <div class="flex space-x-3">
               <button
@@ -122,35 +110,25 @@ async function renderCafesTable() {
 
   tbody.innerHTML = cafes.map(cafe => `
     <tr class="hover:bg-gray-50">
-      <td class="px-6 py-4 whitespace-nowrap">
-        <span class="${cafe.is_active === 1 ? 'text-green-600' : 'text-gray-400'}">
-          ${cafe.is_active === 1 ? '✓ 활성' : '비활성'}
-        </span>
+      <td class="px-6 py-4 whitespace-nowrap text-center">
+        <input
+          type="checkbox"
+          class="cafe-active-checkbox w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+          data-id="${cafe.id}"
+          ${cafe.is_active === 1 ? 'checked' : ''}
+        />
       </td>
       <td class="px-6 py-4 whitespace-nowrap">
         <div class="font-medium text-gray-900">${escapeHtml(cafe.cafe_name)}</div>
       </td>
       <td class="px-6 py-4">
-        <div class="text-sm text-blue-600 truncate max-w-xs">
+        <div class="text-sm text-blue-600 truncate max-w-md">
           <a href="${escapeHtml(cafe.cafe_url)}" target="_blank" class="hover:underline">
             ${escapeHtml(cafe.cafe_url)}
           </a>
         </div>
       </td>
-      <td class="px-6 py-4 whitespace-nowrap">
-        <div class="text-sm text-gray-500">${cafe.cafe_id || '-'}</div>
-      </td>
-      <td class="px-6 py-4 whitespace-nowrap">
-        <div class="text-sm text-gray-500">${formatDate(cafe.created_at)}</div>
-      </td>
-      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-        <button
-          class="btn-toggle-cafe ${cafe.is_active === 1 ? 'text-gray-600' : 'text-green-600'} hover:opacity-70"
-          data-id="${cafe.id}"
-          data-active="${cafe.is_active}"
-        >
-          ${cafe.is_active === 1 ? '비활성화' : '활성화'}
-        </button>
+      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
         <button
           class="btn-delete-cafe text-red-600 hover:text-red-900"
           data-id="${cafe.id}"
@@ -161,19 +139,19 @@ async function renderCafesTable() {
     </tr>
   `).join('')
 
-  // 활성/비활성 토글 이벤트
-  document.querySelectorAll('.btn-toggle-cafe').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+  // 활성/비활성 체크박스 이벤트
+  document.querySelectorAll('.cafe-active-checkbox').forEach(checkbox => {
+    checkbox.addEventListener('change', async (e) => {
       const id = parseInt(e.target.dataset.id)
-      const currentActive = parseInt(e.target.dataset.active)
-      const newActive = currentActive === 1 ? 0 : 1
+      const isActive = e.target.checked ? 1 : 0
 
       try {
-        await window.api.cafes.update(id, { is_active: newActive })
-        await loadCafes()
-        showToast(newActive === 1 ? '카페가 활성화되었습니다' : '카페가 비활성화되었습니다', 'success')
+        await window.api.cafes.update(id, { is_active: isActive })
+        showToast(isActive === 1 ? '카페가 활성화되었습니다' : '카페가 비활성화되었습니다', 'success')
       } catch (error) {
         console.error('카페 상태 변경 실패:', error)
+        // 실패 시 체크박스 상태 복원
+        e.target.checked = !e.target.checked
         showToast('카페 상태 변경에 실패했습니다', 'error')
       }
     })
@@ -243,13 +221,11 @@ export function attachCafeManagerEvents() {
 
     const cafeName = document.getElementById('input-cafe-name').value
     const cafeUrl = document.getElementById('input-cafe-url').value
-    const cafeId = document.getElementById('input-cafe-id').value
 
     try {
       await window.api.cafes.create({
         cafe_name: cafeName,
-        cafe_url: cafeUrl,
-        cafe_id: cafeId || null
+        cafe_url: cafeUrl
       })
 
       closeModal()
@@ -271,12 +247,6 @@ function escapeHtml(text) {
   return div.innerHTML
 }
 
-function formatDate(dateString) {
-  if (!dateString) return '-'
-  const date = new Date(dateString)
-  return date.toLocaleDateString('ko-KR')
-}
-
-function showToast(message, type = 'info') {
+function showToast(message) {
   alert(message)
 }
