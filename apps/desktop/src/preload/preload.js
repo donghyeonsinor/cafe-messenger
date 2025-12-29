@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('api', {
     onLoginComplete: (callback) => ipcRenderer.on('naver:loginComplete', callback),
     onSendProgress: (callback) => ipcRenderer.on('naver:sendProgress', callback),
     onSendComplete: (callback) => ipcRenderer.on('naver:sendComplete', callback),
+    onCaptchaRequired: (callback) => ipcRenderer.on('naver:captchaRequired', callback),
+    onCaptchaResolved: (callback) => ipcRenderer.on('naver:captchaResolved', callback),
     // 이벤트 리스너 제거 (cleanup용)
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
   }

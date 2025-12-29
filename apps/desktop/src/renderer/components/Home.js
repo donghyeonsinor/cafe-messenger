@@ -141,6 +141,17 @@ export function createHome() {
                 <div id="send-limit-warning" class="hidden mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
                   ⚠️ 오늘 발송 한도(50건)에 도달했습니다.
                 </div>
+
+                <!-- CAPTCHA 입력 필요 알림 -->
+                <div id="captcha-alert" class="hidden mt-4 p-4 bg-orange-100 border border-orange-400 rounded-lg">
+                  <div class="flex items-center">
+                    <span class="text-2xl mr-3">⚠️</span>
+                    <div>
+                      <p class="font-semibold text-orange-800">CAPTCHA 입력 필요</p>
+                      <p class="text-sm text-orange-700">쪽지 발송 창에서 보안문자를 입력해주세요.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- 메시지 발송 완료 상태 (숨김) -->
@@ -767,6 +778,8 @@ export function attachHomeEvents() {
   window.api.naver.removeAllListeners('naver:loginComplete')
   window.api.naver.removeAllListeners('naver:sendProgress')
   window.api.naver.removeAllListeners('naver:sendComplete')
+  window.api.naver.removeAllListeners('naver:captchaRequired')
+  window.api.naver.removeAllListeners('naver:captchaResolved')
 
   // IPC 이벤트 리스너: 크롤링 진행
   window.api.naver.onCrawlProgress((event, data) => {
@@ -831,6 +844,18 @@ export function attachHomeEvents() {
   window.api.naver.onSendComplete((event, data) => {
     console.log('[Home] 발송 완료:', data)
     handleSendComplete(data)
+  })
+
+  // IPC 이벤트 리스너: CAPTCHA 감지됨
+  window.api.naver.onCaptchaRequired((event, data) => {
+    console.log('[Home] CAPTCHA 감지됨:', data)
+    document.getElementById('captcha-alert')?.classList.remove('hidden')
+  })
+
+  // IPC 이벤트 리스너: CAPTCHA 해결됨
+  window.api.naver.onCaptchaResolved((event, data) => {
+    console.log('[Home] CAPTCHA 해결됨:', data)
+    document.getElementById('captcha-alert')?.classList.add('hidden')
   })
 
   // 중지하기 버튼
