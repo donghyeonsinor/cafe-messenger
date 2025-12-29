@@ -191,7 +191,6 @@ async function renderMembersTable() {
         try {
           await window.api.members.delete(id)
           await loadMembers()
-          showToast('회원이 삭제되었습니다', 'success')
         } catch (error) {
           console.error('회원 삭제 실패:', error)
           showToast('회원 삭제에 실패했습니다', 'error')
