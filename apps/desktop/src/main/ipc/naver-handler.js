@@ -565,7 +565,7 @@ function register(ipcMain, mainWindowGetter, store) {
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
 
-      const { naver_id, naver_password } = credentials
+      const { account_id, account_password } = credentials
 
       // 특수문자 이스케이프 처리
       const escapeForJs = (str) => {
@@ -577,8 +577,8 @@ function register(ipcMain, mainWindowGetter, store) {
           .replace(/\r/g, '\\r')
       }
 
-      const safeId = escapeForJs(naver_id)
-      const safePw = escapeForJs(naver_password)
+      const safeId = escapeForJs(account_id)
+      const safePw = escapeForJs(account_password)
 
       // JavaScript로 폼 필드 채우기 (아이디, 비밀번호 입력만)
       await loginWindow.webContents.executeJavaScript(`

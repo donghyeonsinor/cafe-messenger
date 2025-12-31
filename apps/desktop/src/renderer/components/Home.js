@@ -9,6 +9,13 @@ let selectedTemplate = null // 선택된 템플릿
 let templates = [] // 템플릿 목록
 let isSending = false // 발송 진행 중 여부
 let sendProgress = { current: 0, total: 0, todaySentCount: 0 } // 발송 진행 상황
+let activeAccountType = 'naver' // 활성 계정 유형 (네이버/다음)
+
+// 계정 유형별 일일 발송 한도
+const DAILY_LIMIT = {
+  naver: 50,
+  daum: 20
+}
 
 // 탐색 기한 옵션
 const PERIOD_OPTIONS = [
@@ -80,7 +87,7 @@ export function createHome() {
 
             <!-- 오늘 발송 현황 표시 -->
             <div id="send-count-badge" class="hidden px-3 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm font-medium">
-              오늘 발송: <span id="today-sent-count">0</span>/50
+              오늘 발송: <span id="today-sent-count">0</span>/<span id="daily-limit">50</span>
             </div>
 
             <button
@@ -139,7 +146,7 @@ export function createHome() {
 
                 <!-- 오늘 발송 제한 경고 -->
                 <div id="send-limit-warning" class="hidden mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
-                  ⚠️ 오늘 발송 한도(50건)에 도달했습니다.
+                  ⚠️ 오늘 발송 한도(<span id="limit-warning-count">50</span>건)에 도달했습니다.
                 </div>
 
                 <!-- CAPTCHA 입력 필요 알림 -->
@@ -529,6 +536,17 @@ async function startSendingMessages() {
     return
   }
 
+  // 활성 계정 정보 조회하여 계정 유형 설정
+  try {
+    const credentials = await window.api.accounts.getActiveCredentials()
+    if (credentials && credentials.account_type) {
+      activeAccountType = credentials.account_type
+      console.log('[Home] 활성 계정 유형:', activeAccountType, '(한도:', DAILY_LIMIT[activeAccountType], '건)')
+    }
+  } catch (error) {
+    console.warn('[Home] 활성 계정 정보 조회 실패, 기본값 사용:', error)
+  }
+
   isSending = true
   sendProgress = { current: 0, total: collectedMembers.length, todaySentCount: 0 }
 
@@ -575,26 +593,44 @@ function updateSendProgressUI(data) {
   const textEl = document.getElementById('sending-progress-text')
   const countBadge = document.getElementById('send-count-badge')
   const todayCountEl = document.getElementById('today-sent-count')
+  const dailyLimitEl = document.getElementById('daily-limit')
   const limitWarning = document.getElementById('send-limit-warning')
+  const limitWarningCount = document.getElementById('limit-warning-count')
+
+  // 현재 활성 계정의 일일 한도
+  const dailyLimit = DAILY_LIMIT[activeAccountType] || 50
+  const ratio = data.todaySentCount / dailyLimit
 
   // 오늘 발송 현황 표시 (초기 정보 또는 진행 중)
   if (countBadge && todayCountEl) {
     countBadge.classList.remove('hidden')
     todayCountEl.textContent = data.todaySentCount
 
-    // 색상 변경: 40건 이상이면 경고 색상
-    if (data.todaySentCount >= 40) {
+    // 동적 한도 표시
+    if (dailyLimitEl) {
+      dailyLimitEl.textContent = dailyLimit
+    }
+
+    // 한도 도달 경고 메시지의 한도도 업데이트
+    if (limitWarningCount) {
+      limitWarningCount.textContent = dailyLimit
+    }
+
+    // 색상 변경: 비율 기반
+    if (ratio >= 1) {
       countBadge.className = 'px-3 py-2 bg-red-100 text-red-800 rounded-lg text-sm font-medium'
-    } else if (data.todaySentCount >= 30) {
+    } else if (ratio >= 0.8) {
       countBadge.className = 'px-3 py-2 bg-orange-100 text-orange-800 rounded-lg text-sm font-medium'
-    } else {
+    } else if (ratio >= 0.6) {
       countBadge.className = 'px-3 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm font-medium'
+    } else {
+      countBadge.className = 'px-3 py-2 bg-green-100 text-green-800 rounded-lg text-sm font-medium'
     }
   }
 
   // 초기 정보만 표시하는 경우 (발송 시작 전)
   if (data.initialInfo) {
-    console.log('[Home] 초기 발송 정보 수신 - 오늘 발송:', data.todaySentCount, '건')
+    console.log('[Home] 초기 발송 정보 수신 - 오늘 발송:', data.todaySentCount, '/', dailyLimit, '건')
     return
   }
 
