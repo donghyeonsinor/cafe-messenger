@@ -2,18 +2,59 @@
 // BrowserWindow를 사용한 네이버 로그인, 쿠키 기반 API 크롤링
 
 const { BrowserWindow, session, Notification } = require('electron')
+const crypto = require('crypto')
+
+// 비밀번호 암호화/복호화 (account-handler.js와 동일한 키 사용)
+const IV_LENGTH = 16
+
+/**
+ * 암호화 키 생성 (고정 키 사용)
+ * SHA-256으로 32바이트 키 생성
+ */
+function getEncryptionKey() {
+  return crypto.createHash('sha256').update('cafe-messenger').digest()
+}
+
+/**
+ * 비밀번호 복호화
+ */
+function decryptPassword(encryptedPassword) {
+  const key = getEncryptionKey()
+  const parts = encryptedPassword.split(':')
+  const iv = Buffer.from(parts[0], 'hex')
+  const encrypted = parts[1]
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv)
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8')
+  decrypted += decipher.final('utf8')
+  return decrypted
+}
 
 // 윈도우 인스턴스 (싱글톤)
 let loginWindow = null
 let messageWindow = null
+let daumLoginWindow = null // 다음 로그인 윈도우
 let getMainWindow = null // 함수로 변경
 
 // 발송 중지 플래그
 let isSendingCancelled = false
 
+// 다음 카페 정보 임시 저장 (메모리)
+let daumCafeInfoMap = new Map() // key: cafe.id, value: { grpid, fldid, cafeName }
+
+// 다음(카카오) 쿠키 임시 저장 (메모리)
+let daumCookieCache = {
+  cookies: [],        // 쿠키 배열
+  cookieString: '',   // API 호출용 쿠키 문자열
+  savedAt: null,      // 저장 시간
+  accountId: null     // 로그인한 계정 ID
+}
+
 // 네이버 URL
 const NAVER_LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
 const NOTE_SEND_URL = 'https://note.naver.com/note/sendForm.nhn'
+
+// 다음 URL
+const DAUM_LOGIN_URL = 'https://logins.daum.net/accounts/oauth/login.do'
 
 /**
  * MainWindow getter 함수 설정
@@ -27,6 +68,45 @@ function setMainWindowGetter(getter) {
  */
 function getMainWindowRef() {
   return getMainWindow ? getMainWindow() : null
+}
+
+/**
+ * 유니코드 이스케이프 문자열 디코딩
+ * @param {string} str - 유니코드 이스케이프 문자열 (예: '\uC0BD\uB2E4\uB9AC')
+ * @returns {string} 디코딩된 문자열 (예: '삽다리')
+ */
+function decodeUnicodeEscape(str) {
+  return str.replace(/\\u([0-9A-Fa-f]{4})/g, (_, code) =>
+    String.fromCharCode(parseInt(code, 16))
+  )
+}
+
+/**
+ * 다음 카페 created 문자열을 타임스탬프로 변환
+ * @param {string} created - 'YY.MM.DD' 또는 'HH:MM' 형식
+ * @returns {number} 타임스탬프 (밀리초)
+ */
+function parseDaumCreated(created) {
+  if (!created) return Date.now()
+
+  // 'HH:MM' 형식 (오늘 게시글)
+  if (created.includes(':') && !created.includes('.')) {
+    const today = new Date()
+    const [hours, minutes] = created.split(':').map(Number)
+    today.setHours(hours, minutes, 0, 0)
+    return today.getTime()
+  }
+
+  // 'YY.MM.DD' 형식
+  const parts = created.split('.')
+  if (parts.length === 3) {
+    const year = 2000 + parseInt(parts[0], 10)
+    const month = parseInt(parts[1], 10) - 1
+    const day = parseInt(parts[2], 10)
+    return new Date(year, month, day).getTime()
+  }
+
+  return Date.now()
 }
 
 /**
@@ -67,6 +147,65 @@ function closeLoginWindow() {
   if (loginWindow && !loginWindow.isDestroyed()) {
     loginWindow.close()
     loginWindow = null
+  }
+}
+
+/**
+ * 다음 로그인 윈도우 생성
+ */
+function createDaumLoginWindow() {
+  if (daumLoginWindow && !daumLoginWindow.isDestroyed()) {
+    daumLoginWindow.focus()
+    return daumLoginWindow
+  }
+
+  const mainWin = getMainWindowRef()
+  daumLoginWindow = new BrowserWindow({
+    width: 500,
+    height: 700,
+    title: '다음 로그인',
+    parent: mainWin,
+    modal: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  })
+
+  // 윈도우 닫힐 때 참조 정리
+  daumLoginWindow.on('closed', () => {
+    daumLoginWindow = null
+  })
+
+  return daumLoginWindow
+}
+
+/**
+ * 다음 로그인 윈도우 닫기
+ */
+function closeDaumLoginWindow() {
+  if (daumLoginWindow && !daumLoginWindow.isDestroyed()) {
+    daumLoginWindow.close()
+    daumLoginWindow = null
+  }
+}
+
+/**
+ * 다음 로그인 상태 확인 (쿠키 기반)
+ */
+async function checkDaumLoginStatus() {
+  try {
+    // 다음 인증 쿠키 확인 (HM_CU 또는 HTS)
+    const cookies = await session.defaultSession.cookies.get({
+      domain: '.daum.net'
+    })
+    // HM_CU 또는 HTS 쿠키가 있으면 로그인 상태로 판단
+    const authCookie = cookies.find(c => c.name === 'HM_CU' || c.name === 'HTS')
+    return authCookie !== undefined
+  } catch (error) {
+    console.error('[Daum] 로그인 상태 확인 실패:', error)
+    return false
   }
 }
 
@@ -555,7 +694,7 @@ function register(ipcMain, mainWindowGetter, store) {
     return await checkLoginStatus()
   })
 
-  // 자동 로그인 실행
+  // 자동 로그인 실행 (발송 여유가 있는 계정 자동 선택)
   ipcMain.handle('naver:autoLogin', async (event, credentials) => {
     try {
       if (!loginWindow || loginWindow.isDestroyed()) {
@@ -565,7 +704,51 @@ function register(ipcMain, mainWindowGetter, store) {
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
 
-      const { account_id, account_password } = credentials
+      // 네이버 일일 발송 한도
+      const NAVER_DAILY_LIMIT = 50
+
+      // credentials가 없으면 DB에서 발송 가능한 네이버 계정 자동 조회
+      let account_id, account_password
+      let selectedAccount = null
+
+      if (credentials && credentials.account_id) {
+        // 기존 방식: 전달받은 credentials 사용
+        account_id = credentials.account_id
+        account_password = credentials.account_password
+        console.log('[Naver] 전달받은 계정으로 자동 로그인:', account_id)
+      } else {
+        // 새 방식: 발송 여유가 있는 계정 자동 선택
+        console.log('[Naver] 발송 가능한 네이버 계정 자동 탐색 중...')
+
+        const naverAccounts = store.find('accounts', acc =>
+          acc.account_type === 'naver' &&
+          (acc.today_sent_count === null || acc.today_sent_count === undefined || acc.today_sent_count < NAVER_DAILY_LIMIT)
+        )
+
+        if (naverAccounts.length === 0) {
+          console.log('[Naver] 발송 가능한 네이버 계정이 없습니다')
+          // UI에 알림 전송
+          getMainWindowRef()?.webContents.send('naver:noAvailableAccount', {
+            message: '발송 가능한 네이버 계정이 없습니다.\n모든 계정이 일일 발송 한도(50건)에 도달했습니다.'
+          })
+          return { success: false, error: '발송 가능한 네이버 계정이 없습니다', noAvailableAccount: true }
+        }
+
+        // 발송 가능 건수가 가장 많은 계정 선택 (null/undefined는 0으로 처리)
+        naverAccounts.sort((a, b) => {
+          const aCount = a.today_sent_count || 0
+          const bCount = b.today_sent_count || 0
+          return aCount - bCount // 발송 횟수가 적은 계정 우선
+        })
+
+        selectedAccount = naverAccounts[0]
+        const remainingCount = NAVER_DAILY_LIMIT - (selectedAccount.today_sent_count || 0)
+        console.log(`[Naver] 자동 선택 계정: ${selectedAccount.account_name} (발송 가능: ${remainingCount}건)`)
+
+        account_id = selectedAccount.account_id
+        // 비밀번호 복호화
+        account_password = decryptPassword(selectedAccount.account_password)
+      }
 
       // 특수문자 이스케이프 처리
       const escapeForJs = (str) => {
@@ -603,7 +786,11 @@ function register(ipcMain, mainWindowGetter, store) {
       `)
 
       console.log('[Naver] 아이디/비밀번호 자동 입력 완료')
-      return { success: true }
+      return {
+        success: true,
+        accountName: selectedAccount?.account_name,
+        accountId: account_id
+      }
     } catch (error) {
       console.error('[Naver] autoLogin 실패:', error)
       throw error
@@ -1023,10 +1210,626 @@ function register(ipcMain, mainWindowGetter, store) {
     return { success: true }
   })
 
+  // ===== 다음 로그인 핸들러 =====
+
+  // 다음 로그인 창 열기
+  ipcMain.handle('daum:openLogin', async () => {
+    try {
+      // 이미 로그인된 상태인지 확인
+      const isAlreadyLoggedIn = await checkDaumLoginStatus()
+      if (isAlreadyLoggedIn) {
+        console.log('[Daum] 이미 로그인된 상태 - 바로 크롤링 시작 가능')
+        // 로그인 완료 이벤트 바로 전송
+        const mainWindow = getMainWindowRef()
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daum:loginComplete', {
+            success: true,
+            alreadyLoggedIn: true
+          })
+        }
+        return { success: true, alreadyLoggedIn: true }
+      }
+
+      // 기존 로그인 창이 있으면 닫기 (ERR_FAILED 방지)
+      closeDaumLoginWindow()
+      await new Promise(r => setTimeout(r, 300)) // 창 닫힘 대기
+
+      const window = createDaumLoginWindow()
+
+      // 기존 이벤트 핸들러 제거 후 새로 등록 (중복 방지) - loadURL 전에 등록!
+      window.webContents.removeAllListeners('did-navigate')
+      window.webContents.removeAllListeners('did-finish-load')
+
+      // 로그인 완료 처리 함수 (중복 호출 방지)
+      let loginCompleteHandled = false
+      async function handleLoginComplete() {
+        if (loginCompleteHandled) return
+
+        const isLoggedIn = await checkDaumLoginStatus()
+        if (!isLoggedIn) return
+
+        loginCompleteHandled = true
+        console.log('[Daum] 로그인 성공 감지 - 쿠키 저장 중...')
+
+        // 다음 쿠키 가져오기
+        const daumCookies = await session.defaultSession.cookies.get({ domain: '.daum.net' })
+        // 카카오 쿠키도 함께 가져오기 (로그인 세션용)
+        const kakaoCookies = await session.defaultSession.cookies.get({ domain: '.kakao.com' })
+        const allCookies = [...daumCookies, ...kakaoCookies]
+
+        // 쿠키 문자열 생성 (API 호출용)
+        const cookieString = allCookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+        // 쿠키 캐시에 저장
+        daumCookieCache = {
+          cookies: allCookies,
+          cookieString: cookieString,
+          savedAt: new Date().toISOString(),
+          accountId: null
+        }
+
+        console.log('[Daum] 쿠키 캐시 저장 완료')
+        console.log(`  - 다음 쿠키: ${daumCookies.length}개`)
+        console.log(`  - 카카오 쿠키: ${kakaoCookies.length}개`)
+        console.log(`  - 총 쿠키: ${allCookies.length}개`)
+
+        // 주요 인증 쿠키 확인
+        const authCookies = allCookies.filter(c =>
+          ['HM_CU', 'HTS', '_kawlt', '_karmt', '_kahai'].includes(c.name)
+        )
+        authCookies.forEach(c => console.log(`  - [인증] ${c.name}: ${c.value.substring(0, 20)}...`))
+
+        // Renderer에 로그인 완료 이벤트 전송
+        const mainWindow = getMainWindowRef()
+        console.log('[Daum] mainWindow 참조:', mainWindow ? 'exists' : 'null')
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          console.log('[Daum] daum:loginStatusChanged 이벤트 전송')
+          mainWindow.webContents.send('daum:loginStatusChanged', true)
+
+          console.log('[Daum] daum:loginComplete 이벤트 전송 (100ms 후)')
+          setTimeout(() => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              console.log('[Daum] daum:loginComplete 이벤트 전송 실행')
+              mainWindow.webContents.send('daum:loginComplete', {
+                success: true,
+                cookieCount: allCookies.length,
+                daumCookieCount: daumCookies.length,
+                kakaoCookieCount: kakaoCookies.length
+              })
+            } else {
+              console.error('[Daum] mainWindow가 파괴되어 이벤트 전송 실패')
+            }
+            closeDaumLoginWindow()
+          }, 100)
+        } else {
+          console.error('[Daum] mainWindow를 찾을 수 없어 이벤트 전송 실패')
+          closeDaumLoginWindow()
+        }
+      }
+
+      // 페이지 로드 완료 후 카카오 로그인 버튼 자동 클릭 및 자동 로그인
+      window.webContents.on('did-finish-load', async () => {
+        const currentUrl = window.webContents.getURL()
+        console.log('[Daum] 페이지 로드 완료:', currentUrl)
+
+        // 로그인이 이미 완료되었는지 확인 (CAPTCHA 수동 입력 후 등)
+        // 다음/카카오 메인 페이지 또는 로그인 후 리다이렉트 페이지에서 확인
+        if (!currentUrl.includes('login') && !currentUrl.includes('accounts')) {
+          console.log('[Daum] 로그인 후 페이지 감지 - 로그인 상태 확인')
+          await handleLoginComplete()
+          return
+        }
+
+        // 다음 로그인 페이지에서 카카오 버튼 자동 클릭
+        if (currentUrl.includes('logins.daum.net/accounts/oauth/login')) {
+          console.log('[Daum] 카카오 로그인 버튼 자동 클릭 시도')
+
+          // 버튼이 나타날 때까지 반복 시도 (최대 5초)
+          const maxAttempts = 10
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            await new Promise(r => setTimeout(r, 500)) // 500ms 대기
+
+            try {
+              const clicked = await window.webContents.executeJavaScript(`
+                (function() {
+                  // 카카오 로그인 버튼 찾기 (여러 셀렉터 시도)
+                  const kakaoBtn = document.querySelector('.login__container--btn-kakao') ||
+                                   document.querySelector('[data-tiara-action-name="카카오로 로그인 클릭"]') ||
+                                   document.querySelector('button.btn-common') ||
+                                   document.querySelector('.btn-kakao') ||
+                                   document.querySelector('button[class*="kakao"]');
+                  if (kakaoBtn) {
+                    kakaoBtn.click();
+                    console.log('[AutoClick] 카카오 로그인 버튼 클릭 성공');
+                    return true;
+                  }
+                  return false;
+                })();
+              `)
+
+              if (clicked) {
+                console.log('[Daum] 카카오 버튼 클릭 성공 (시도 ' + attempt + '회)')
+                break
+              } else {
+                console.log('[Daum] 카카오 버튼 찾는 중... (시도 ' + attempt + '/' + maxAttempts + ')')
+              }
+            } catch (e) {
+              console.log('[Daum] 카카오 버튼 클릭 시도 실패:', e.message)
+            }
+          }
+        }
+
+        // 카카오 로그인 페이지에서 다음 계정 자동 입력
+        if (currentUrl.includes('accounts.kakao.com')) {
+          console.log('[Daum] 카카오 로그인 페이지 감지 - 다음 계정 자동 입력 시도')
+
+          try {
+            // 발송 가능한 다음 계정 조회 (account_type === 'daum' && today_sent_count < 20)
+            // 카카오(다음) 계정은 일일 발송 한도가 20건
+            const DAUM_DAILY_LIMIT = 20
+            const daumAccounts = store.find('accounts', acc =>
+              acc.account_type === 'daum' &&
+              (acc.today_sent_count === null || acc.today_sent_count === undefined || acc.today_sent_count < DAUM_DAILY_LIMIT)
+            )
+
+            if (daumAccounts.length === 0) {
+              console.log('[Daum] 발송 가능한 다음 계정이 없습니다 (모든 계정 일일 한도 20건 도달)')
+              return
+            }
+
+            // 첫 번째 발송 가능 계정 사용
+            const account = daumAccounts[0]
+            console.log(`[Daum] 자동 입력 계정: ${account.account_name} (발송 가능: ${DAUM_DAILY_LIMIT - (account.today_sent_count || 0)}건)`)
+
+            // 비밀번호 복호화
+            const decryptedPassword = decryptPassword(account.account_password)
+
+            // 특수문자 이스케이프 처리
+            const escapeForJs = (str) => {
+              return str
+                .replace(/\\/g, '\\\\')
+                .replace(/'/g, "\\'")
+                .replace(/"/g, '\\"')
+                .replace(/\n/g, '\\n')
+                .replace(/\r/g, '\\r')
+            }
+
+            const safeId = escapeForJs(account.account_id)
+            const safePw = escapeForJs(decryptedPassword)
+
+            // 입력 필드가 나타날 때까지 반복 시도 (최대 5초)
+            const maxInputAttempts = 10
+            for (let attempt = 1; attempt <= maxInputAttempts; attempt++) {
+              await new Promise(r => setTimeout(r, 500))
+
+              try {
+                const filled = await window.webContents.executeJavaScript(`
+                  (function() {
+                    // React input에 값을 설정하는 헬퍼 함수
+                    function setNativeValue(element, value) {
+                      // React의 value setter를 가져와서 호출 (controlled input 지원)
+                      const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
+                      const prototype = Object.getPrototypeOf(element);
+                      const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+                      if (valueSetter && valueSetter !== prototypeValueSetter) {
+                        prototypeValueSetter.call(element, value);
+                      } else if (prototypeValueSetter) {
+                        prototypeValueSetter.call(element, value);
+                      } else {
+                        element.value = value;
+                      }
+
+                      // React가 인식하는 이벤트 발생
+                      element.dispatchEvent(new Event('input', { bubbles: true }));
+                      element.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
+                    // 카카오 로그인 페이지의 입력 필드 찾기 (다양한 셀렉터 시도)
+                    const emailInput = document.querySelector('input[name="loginId"]') ||
+                                       document.querySelector('input#loginId--1') ||
+                                       document.querySelector('#loginId') ||
+                                       document.querySelector('input[type="email"]') ||
+                                       document.querySelector('input[placeholder*="이메일"]') ||
+                                       document.querySelector('input[placeholder*="카카오메일"]') ||
+                                       document.querySelector('input[placeholder*="아이디"]') ||
+                                       document.querySelector('input[data-testid="login-id-input"]');
+                    const pwInput = document.querySelector('input[name="password"]') ||
+                                    document.querySelector('input#password--2') ||
+                                    document.querySelector('#password') ||
+                                    document.querySelector('input[type="password"]') ||
+                                    document.querySelector('input[data-testid="login-password-input"]');
+
+                    console.log('[AutoLogin] 이메일 입력 필드:', emailInput ? 'found' : 'not found');
+                    console.log('[AutoLogin] 비밀번호 입력 필드:', pwInput ? 'found' : 'not found');
+
+                    if (emailInput && pwInput) {
+                      // 이메일 입력 (React controlled input 방식)
+                      emailInput.focus();
+                      setNativeValue(emailInput, '${safeId}');
+                      console.log('[AutoLogin] 이메일 입력 완료: ${safeId}');
+
+                      // 비밀번호 입력 (React controlled input 방식)
+                      pwInput.focus();
+                      setNativeValue(pwInput, '${safePw}');
+                      console.log('[AutoLogin] 비밀번호 입력 완료');
+
+                      console.log('[AutoLogin] 카카오 이메일/비밀번호 자동 입력 완료');
+
+                      // 로그인 버튼 클릭 (입력 후 약간의 딜레이)
+                      setTimeout(() => {
+                        const loginBtn = document.querySelector('button[type="submit"]') ||
+                                         document.querySelector('button[class*="submit"]') ||
+                                         document.querySelector('button[class*="login"]') ||
+                                         document.querySelector('.btn_confirm') ||
+                                         document.querySelector('button.submit') ||
+                                         document.querySelector('#login-btn') ||
+                                         document.querySelector('button[data-testid="login-button"]');
+                        if (loginBtn) {
+                          loginBtn.click();
+                          console.log('[AutoLogin] 로그인 버튼 클릭 완료');
+                        } else {
+                          console.log('[AutoLogin] 로그인 버튼을 찾을 수 없습니다');
+                        }
+                      }, 500);
+
+                      return { success: true };
+                    }
+                    return { success: false, reason: 'input fields not found' };
+                  })();
+                `)
+
+                if (filled.success) {
+                  console.log('[Daum] 카카오 로그인 자동 입력 성공 (시도 ' + attempt + '회)')
+                  break
+                } else {
+                  console.log('[Daum] 입력 필드 찾는 중... (시도 ' + attempt + '/' + maxInputAttempts + ')')
+                }
+              } catch (e) {
+                console.log('[Daum] 자동 입력 시도 실패:', e.message)
+              }
+            }
+          } catch (autoLoginError) {
+            console.error('[Daum] 자동 로그인 실패:', autoLoginError)
+          }
+        }
+      })
+
+      // 페이지 이동 감지하여 로그인 성공 확인
+      window.webContents.on('did-navigate', async (event, url) => {
+        console.log('[Daum] 페이지 이동:', url)
+
+        // 로그인/계정 페이지가 아닌 곳으로 이동하면 로그인 성공 가능성 확인
+        if (!url.includes('login') && !url.includes('accounts')) {
+          console.log('[Daum] 로그인 후 리다이렉트 감지 - 로그인 상태 확인')
+          await handleLoginComplete()
+        }
+      })
+
+      // 이벤트 리스너 등록 후 URL 로드
+      await window.loadURL(DAUM_LOGIN_URL)
+
+      console.log('[Daum] 로그인 창 열림')
+      return { success: true }
+    } catch (error) {
+      console.error('[Daum] openLogin 실패:', error)
+      throw error
+    }
+  })
+
+  // 다음 로그인 창 닫기
+  ipcMain.handle('daum:closeWindow', async () => {
+    try {
+      closeDaumLoginWindow()
+      console.log('[Daum] 로그인 창 닫힘')
+      return { success: true }
+    } catch (error) {
+      console.error('[Daum] closeWindow 실패:', error)
+      throw error
+    }
+  })
+
+  // 다음 로그인 상태 확인
+  ipcMain.handle('daum:checkLogin', async () => {
+    return await checkDaumLoginStatus()
+  })
+
+  // 다음 카페 정보 추출 (grpid, fldid)
+  ipcMain.handle('daum:fetchCafeIds', async () => {
+    try {
+      // 1. 다음 카페 목록 조회 (cafe_type === 'daum')
+      const daumCafes = store.find('cafes', cafe => cafe.cafe_type === 'daum')
+
+      if (daumCafes.length === 0) {
+        console.log('[Daum] 등록된 다음 카페가 없습니다')
+        return { success: false, error: '등록된 다음 카페가 없습니다' }
+      }
+
+      console.log(`[Daum] 다음 카페 ${daumCafes.length}개 정보 추출 시작`)
+
+      // 2. 결과 초기화
+      daumCafeInfoMap.clear()
+
+      // 3. 다음 쿠키 가져오기
+      const cookies = await session.defaultSession.cookies.get({ domain: '.daum.net' })
+      const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+      // 4. 각 카페 URL 순회
+      for (let i = 0; i < daumCafes.length; i++) {
+        const cafe = daumCafes[i]
+
+        try {
+          console.log(`[Daum] 카페 정보 추출 (${i + 1}/${daumCafes.length}): ${cafe.cafe_name}`)
+
+          // fetch로 카페 URL 접속 (쿠키 포함)
+          const response = await fetch(cafe.cafe_url, {
+            headers: {
+              'Cookie': cookieString,
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+          })
+
+          const html = await response.text()
+
+          // HTML에서 grpid, fldid 추출
+          const grpidMatch = html.match(/grpid=([A-Za-z0-9]+)/)
+          const fldidMatch = html.match(/fldid=([A-Za-z0-9]+)/)
+
+          if (grpidMatch && fldidMatch) {
+            const grpid = grpidMatch[1]
+            const fldid = fldidMatch[1]
+
+            console.log(`[Daum] 추출 성공: ${cafe.cafe_name} → grpid=${grpid}, fldid=${fldid}`)
+
+            // 권한 확인: bbs_list 페이지에서 MEMBER_ROLECODE 확인
+            const bbsListUrl = `https://cafe.daum.net/_c21_/bbs_list?grpid=${grpid}&fldid=${fldid}`
+            console.log(`[Daum] 권한 확인 중: ${bbsListUrl}`)
+
+            const bbsResponse = await fetch(bbsListUrl, {
+              headers: {
+                'Cookie': cookieString,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              }
+            })
+            const bbsHtml = await bbsResponse.text()
+
+            // MEMBER_ROLECODE 추출 (예: MEMBER_ROLECODE = 25 또는 "MEMBER_ROLECODE":25)
+            const roleCodeMatch = bbsHtml.match(/MEMBER_ROLECODE["\s:=]+(\d+)/)
+            const roleCode = roleCodeMatch ? parseInt(roleCodeMatch[1], 10) : 0
+            const hasPermission = roleCode >= 25
+
+            console.log(`[Daum] ${cafe.cafe_name} - MEMBER_ROLECODE: ${roleCode}, 권한: ${hasPermission ? '정회원 이상' : '권한 미달'}`)
+
+            if (hasPermission) {
+              daumCafeInfoMap.set(cafe.id, {
+                grpid: grpid,
+                fldid: fldid,
+                cafeName: cafe.cafe_name,
+                cafeUrl: cafe.cafe_url,
+                roleCode: roleCode,
+                hasPermission: true
+              })
+            } else {
+              console.log(`[Daum] ${cafe.cafe_name} - 권한 미달 (ROLECODE: ${roleCode} < 25), 스킵`)
+            }
+
+            // 진행 상황 알림
+            getMainWindowRef()?.webContents.send('daum:fetchCafeIdsProgress', {
+              current: i + 1,
+              total: daumCafes.length,
+              cafe: cafe.cafe_name,
+              grpid: grpid,
+              fldid: fldid,
+              roleCode: roleCode,
+              hasPermission: hasPermission,
+              success: true
+            })
+          } else {
+            console.log(`[Daum] 추출 실패: ${cafe.cafe_name} - grpid/fldid를 찾을 수 없음`)
+
+            // 진행 상황 알림 (실패)
+            getMainWindowRef()?.webContents.send('daum:fetchCafeIdsProgress', {
+              current: i + 1,
+              total: daumCafes.length,
+              cafe: cafe.cafe_name,
+              grpid: null,
+              fldid: null,
+              hasPermission: false,
+              success: false
+            })
+          }
+
+          // Rate limiting - 500ms 딜레이
+          if (i < daumCafes.length - 1) {
+            await new Promise(r => setTimeout(r, 500))
+          }
+
+        } catch (cafeError) {
+          console.error(`[Daum] 카페 ${cafe.cafe_name} 정보 추출 실패:`, cafeError)
+        }
+      }
+
+      const permittedCount = daumCafeInfoMap.size
+      console.log(`[Daum] 카페 정보 추출 완료: ${daumCafes.length}개 중 ${permittedCount}개 권한 확인`)
+
+      // 완료 이벤트
+      getMainWindowRef()?.webContents.send('daum:fetchCafeIdsComplete', {
+        success: true,
+        count: permittedCount,
+        total: daumCafes.length,
+        permittedCount: permittedCount
+      })
+
+      return { success: true, count: permittedCount, total: daumCafes.length }
+
+    } catch (error) {
+      console.error('[Daum] fetchCafeIds 실패:', error)
+
+      getMainWindowRef()?.webContents.send('daum:fetchCafeIdsComplete', {
+        success: false,
+        error: error.message
+      })
+
+      throw error
+    }
+  })
+
+  // 저장된 다음 카페 정보 조회 (단일)
+  ipcMain.handle('daum:getCafeInfo', async (event, cafeId) => {
+    return daumCafeInfoMap.get(cafeId) || null
+  })
+
+  // 모든 다음 카페 정보 조회
+  ipcMain.handle('daum:getAllCafeInfo', async () => {
+    return Object.fromEntries(daumCafeInfoMap)
+  })
+
+  // 저장된 쿠키 캐시 조회
+  ipcMain.handle('daum:getCookieCache', async () => {
+    return {
+      hasCookies: daumCookieCache.cookies.length > 0,
+      cookieCount: daumCookieCache.cookies.length,
+      savedAt: daumCookieCache.savedAt,
+      accountId: daumCookieCache.accountId
+    }
+  })
+
+  // 쿠키 캐시 초기화
+  ipcMain.handle('daum:clearCookieCache', async () => {
+    daumCookieCache = {
+      cookies: [],
+      cookieString: '',
+      savedAt: null,
+      accountId: null
+    }
+    console.log('[Daum] 쿠키 캐시 초기화됨')
+    return { success: true }
+  })
+
+  // 다음 카페 회원 크롤링
+  ipcMain.handle('daum:startCrawling', async (event, options = {}) => {
+    try {
+      const { datePeriod } = options
+
+      // 1. 권한 있는 카페 목록 확인
+      if (daumCafeInfoMap.size === 0) {
+        console.log('[Daum] 권한이 확인된 다음 카페가 없습니다')
+        return { success: false, error: '권한이 확인된 다음 카페가 없습니다' }
+      }
+
+      // 날짜 필터 계산
+      const minTimestamp = getDateFilter(datePeriod)
+      console.log(`[Daum] 다음 카페 회원 크롤링 시작: ${daumCafeInfoMap.size}개 카페, 기간: ${datePeriod || '전체'}`)
+      if (minTimestamp) {
+        console.log(`[Daum] 최소 타임스탬프: ${new Date(minTimestamp).toISOString()}`)
+      }
+
+      // 2. 다음 쿠키 가져오기
+      const cookies = await session.defaultSession.cookies.get({ domain: '.daum.net' })
+      const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+      const collectedMembers = new Map() // encUserId 기준 중복 제거
+      let skippedByDate = 0 // 날짜 필터로 스킵된 게시글 수
+
+      // 3. 각 카페 순회
+      let cafeIndex = 0
+      for (const [cafeId, cafeInfo] of daumCafeInfoMap) {
+        cafeIndex++
+        const { grpid, fldid, cafeName } = cafeInfo
+        const bbsListUrl = `https://cafe.daum.net/_c21_/bbs_list?grpid=${grpid}&fldid=${fldid}`
+
+        console.log(`[Daum] 카페 크롤링 (${cafeIndex}/${daumCafeInfoMap.size}): ${cafeName}`)
+
+        try {
+          // fetch로 bbs_list 접속
+          const response = await fetch(bbsListUrl, {
+            headers: {
+              'Cookie': cookieString,
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+          })
+          const html = await response.text()
+
+          // 정규식으로 created, author, encUserId 추출
+          const regex = /created:\s*'([^']*)'[\s\S]*?author:\s*'([^']*)',\s*userid:\s*'[^']*',\s*encUserId:\s*'([^']*)'/g
+          let match
+          while ((match = regex.exec(html)) !== null) {
+            const created = match[1]
+            const authorUnicode = match[2]
+            const encUserId = match[3]
+
+            // 날짜 필터링
+            const timestamp = parseDaumCreated(created)
+            if (minTimestamp && timestamp < minTimestamp) {
+              skippedByDate++
+              continue // 기간 외 게시글 스킵
+            }
+
+            // 유니코드 이스케이프 → 한글 변환
+            const author = decodeUnicodeEscape(authorUnicode)
+
+            if (!collectedMembers.has(encUserId)) {
+              collectedMembers.set(encUserId, {
+                encUserId,
+                nickName: author,  // 네이버와 동일한 필드명 사용
+                cafeId,
+                cafeName,
+                created,
+                writeDateTimestamp: timestamp
+              })
+
+              // 진행 상황 알림
+              getMainWindowRef()?.webContents.send('daum:crawlProgress', {
+                current: collectedMembers.size,
+                cafe: cafeName,
+                member: { encUserId, nickName: author, cafeName, created }
+              })
+            }
+          }
+
+          console.log(`[Daum] ${cafeName} 크롤링 완료 - 현재 총 ${collectedMembers.size}명 (기간 외 스킵: ${skippedByDate}건)`)
+
+          // Rate limiting - 500ms 딜레이
+          if (cafeIndex < daumCafeInfoMap.size) {
+            await new Promise(r => setTimeout(r, 500))
+          }
+
+        } catch (cafeError) {
+          console.error(`[Daum] 카페 ${cafeName} 크롤링 실패:`, cafeError)
+        }
+      }
+
+      // 완료 이벤트
+      const members = Array.from(collectedMembers.values())
+      console.log(`[Daum] 다음 카페 크롤링 완료: 총 ${members.length}명 수집`)
+
+      getMainWindowRef()?.webContents.send('daum:crawlComplete', {
+        success: true,
+        count: members.length,
+        members
+      })
+
+      return { success: true, count: members.length, members }
+
+    } catch (error) {
+      console.error('[Daum] startCrawling 실패:', error)
+
+      getMainWindowRef()?.webContents.send('daum:crawlComplete', {
+        success: false,
+        error: error.message
+      })
+
+      throw error
+    }
+  })
+
   console.log('[IPC] Naver handlers registered (API mode)')
+  console.log('[IPC] Daum handlers registered')
 }
 
 module.exports = {
   register,
-  closeLoginWindow
+  closeLoginWindow,
+  closeDaumLoginWindow
 }
