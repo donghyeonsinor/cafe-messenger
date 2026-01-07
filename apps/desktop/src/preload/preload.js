@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('api', {
     onCaptchaRequired: (callback) => ipcRenderer.on('naver:captchaRequired', callback),
     onCaptchaResolved: (callback) => ipcRenderer.on('naver:captchaResolved', callback),
     onNoAvailableAccount: (callback) => ipcRenderer.on('naver:noAvailableAccount', callback),
+    onAccountSwitchRequired: (callback) => ipcRenderer.on('naver:accountSwitchRequired', callback),
     // 이벤트 리스너 제거 (cleanup용)
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
   },

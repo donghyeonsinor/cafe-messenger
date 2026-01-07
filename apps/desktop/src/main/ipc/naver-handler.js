@@ -35,6 +35,9 @@ let messageWindow = null
 let daumLoginWindow = null // 다음 로그인 윈도우
 let getMainWindow = null // 함수로 변경
 
+// DataStore 참조 (register 시 설정)
+let dataStore = null
+
 // 발송 중지 플래그
 let isSendingCancelled = false
 
@@ -56,6 +59,10 @@ const NOTE_SEND_URL = 'https://note.naver.com/note/sendForm.nhn'
 // 다음 URL
 const DAUM_LOGIN_URL = 'https://logins.daum.net/accounts/oauth/login.do'
 
+// 일일 발송 한도
+const NAVER_DAILY_LIMIT = 50
+const DAUM_DAILY_LIMIT = 20
+
 /**
  * MainWindow getter 함수 설정
  */
@@ -68,6 +75,88 @@ function setMainWindowGetter(getter) {
  */
 function getMainWindowRef() {
   return getMainWindow ? getMainWindow() : null
+}
+
+/**
+ * 네이버 세션 쿠키 삭제 (계정 전환 전)
+ */
+async function clearNaverSession() {
+  try {
+    const ses = session.defaultSession
+
+    // 네이버 관련 쿠키 삭제
+    const cookies = await ses.cookies.get({ domain: '.naver.com' })
+    for (const cookie of cookies) {
+      const url = `https://${cookie.domain.replace(/^\./, '')}${cookie.path}`
+      await ses.cookies.remove(url, cookie.name)
+    }
+    console.log(`[Naver] 세션 쿠키 ${cookies.length}개 삭제 완료`)
+  } catch (error) {
+    console.error('[Naver] 세션 삭제 실패:', error)
+  }
+}
+
+/**
+ * 발송 가능한 네이버 계정 검색 (한도 미달 계정 우선)
+ * @param {number|null} excludeAccountId - 제외할 계정 ID (현재 계정)
+ * @returns {{ account: object|null, remainingCount: number }} 발송 가능한 계정 및 남은 발송 가능 건수
+ */
+function findAvailableNaverAccount(excludeAccountId = null) {
+  if (!dataStore) {
+    console.error('[Naver] dataStore가 초기화되지 않았습니다')
+    return { account: null, remainingCount: 0 }
+  }
+
+  const availableAccounts = dataStore.find('accounts', acc =>
+    acc.account_type === 'naver' &&
+    (excludeAccountId === null || acc.id !== excludeAccountId) &&
+    (acc.today_sent_count === null ||
+     acc.today_sent_count === undefined ||
+     acc.today_sent_count < NAVER_DAILY_LIMIT)
+  )
+
+  if (availableAccounts.length === 0) {
+    return { account: null, remainingCount: 0 }
+  }
+
+  // 발송 횟수가 적은 계정 우선 정렬
+  availableAccounts.sort((a, b) =>
+    (a.today_sent_count || 0) - (b.today_sent_count || 0)
+  )
+
+  const selected = availableAccounts[0]
+  const remainingCount = NAVER_DAILY_LIMIT - (selected.today_sent_count || 0)
+
+  return { account: selected, remainingCount }
+}
+
+/**
+ * 로그인 완료 감지 핸들러 설정
+ * @param {BrowserWindow} window - 로그인 윈도우
+ */
+function setupLoginCompleteHandler(window) {
+  if (!window || window.isDestroyed()) return
+
+  window.webContents.removeAllListeners('did-navigate')
+  window.webContents.on('did-navigate', async (event, url) => {
+    console.log('[Naver] 페이지 이동:', url)
+
+    // 로그인 페이지가 아닌 곳으로 이동하면 로그인 성공으로 판단
+    if (url.includes('naver.com') && !url.includes('nidlogin')) {
+      const isLoggedIn = await checkLoginStatus()
+
+      if (isLoggedIn) {
+        console.log('[Naver] 로그인 성공 감지 - 창 자동 닫기')
+
+        setTimeout(() => {
+          getMainWindowRef()?.webContents.send('naver:loginComplete', {
+            success: true
+          })
+          closeLoginWindow()
+        }, 100)
+      }
+    }
+  })
 }
 
 /**
@@ -269,17 +358,42 @@ async function sendMessageViaBrowser(targetCafeMemberKey, content, retryCount = 
       // 매 발송마다 기존 창을 닫고 새로 생성
       closeMessageWindow()
 
-      // 창을 닫은 후 안정화 대기 (ERR_FAILED 방지)
-      await new Promise(r => setTimeout(r, 500))
+      // 창을 닫은 후 안정화 대기 (ERR_FAILED 방지) - 1초로 증가
+      await new Promise(r => setTimeout(r, 1000))
 
       const window = createMessageWindow()
       window.showInactive() // 포커스 없이 창 표시
       const url = `${NOTE_SEND_URL}?popup=1&svcType=2&targetCafeMemberKey=${targetCafeMemberKey}`
 
-      await window.loadURL(url)
-      console.log(`[Naver] 쪽지 발송 페이지 로드: ${targetCafeMemberKey}`)
+      // 리다이렉트가 발생해도 최종 페이지 로드를 기다림
+      await new Promise((resolveLoad, rejectLoad) => {
+        const timeout = setTimeout(() => {
+          rejectLoad(new Error('페이지 로드 타임아웃 (15초)'))
+        }, 15000)
 
-      // 페이지 로드 완료 대기
+        window.webContents.once('did-finish-load', () => {
+          clearTimeout(timeout)
+          resolveLoad()
+        })
+
+        window.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+          // 리다이렉트로 인한 ERR_ABORTED는 무시
+          if (errorCode === -3) {
+            console.log('[Naver] 리다이렉트 감지 - 계속 대기')
+            return
+          }
+          clearTimeout(timeout)
+          rejectLoad(new Error(`페이지 로드 실패: ${errorDescription} (${errorCode})`))
+        })
+
+        window.loadURL(url).catch(() => {
+          // loadURL 에러는 무시 (이벤트로 처리)
+        })
+      })
+
+      console.log(`[Naver] 쪽지 발송 페이지 로드 완료: ${targetCafeMemberKey}`)
+
+      // 페이지 로드 완료 후 안정화 대기
       await new Promise(r => setTimeout(r, 1000))
 
       // JavaScript alert/confirm 오버라이드 (알림창 자동 닫기)
@@ -432,14 +546,20 @@ async function sendMessageViaBrowser(targetCafeMemberKey, content, retryCount = 
           memberKey: targetCafeMemberKey
         })
 
-        // 사용자가 CAPTCHA 입력할 때까지 대기 (최대 60초)
-        const maxWaitTime = 60000
-        const checkInterval = 1000
+        // 사용자가 CAPTCHA 입력할 때까지 무제한 대기
+        const checkInterval = 2000  // 2초마다 체크
         let waitedTime = 0
 
-        while (waitedTime < maxWaitTime) {
+        console.log(`[Naver] CAPTCHA 대기 시작 (사용자 입력 완료까지 무제한 대기)`)
+
+        while (true) {
           await new Promise(r => setTimeout(r, checkInterval))
           waitedTime += checkInterval
+
+          // 30초마다 로그 출력 (너무 많은 로그 방지)
+          if (waitedTime % 30000 === 0) {
+            console.log(`[Naver] CAPTCHA 대기 중... (${waitedTime / 1000}초 경과)`)
+          }
 
           // 창이 닫혔거나 파괴되었으면 성공으로 처리 (발송 완료 후 창이 닫힘)
           if (!window || window.isDestroyed()) {
@@ -447,47 +567,56 @@ async function sendMessageViaBrowser(targetCafeMemberKey, content, retryCount = 
             getMainWindowRef()?.webContents.send('naver:captchaResolved', {
               memberKey: targetCafeMemberKey
             })
-            resolve({ success: true, todaySentCount: todaySentCount + 1 }) // 발송 성공 시 +1
+            resolve({ success: true, todaySentCount: todaySentCount + 1 })
             return
           }
 
           try {
+            // 현재 URL 확인 (페이지 이동 감지)
+            const currentUrl = window.webContents.getURL()
+            console.log(`[Naver] 현재 URL: ${currentUrl}`)
+
+            // 발송 완료 페이지로 이동했는지 확인
+            if (currentUrl.includes('sendComplete') || currentUrl.includes('success')) {
+              console.log(`[Naver] CAPTCHA 처리 완료 (발송 완료 페이지로 이동)`)
+              getMainWindowRef()?.webContents.send('naver:captchaResolved', {
+                memberKey: targetCafeMemberKey
+              })
+              resolve({ success: true, todaySentCount: todaySentCount + 1 })
+              return
+            }
+
             // CAPTCHA 레이어가 사라졌는지 확인
             const checkResult = await window.webContents.executeJavaScript(`
               (function() {
                 const captchaLayer = document.getElementById('note_captcha');
-                // CAPTCHA 레이어가 없거나 숨겨져 있으면 성공
-                if (!captchaLayer || captchaLayer.style.display === 'none') {
-                  return { captchaGone: true };
-                }
-                return { captchaGone: false };
+                const captchaVisible = captchaLayer && captchaLayer.style.display !== 'none';
+                console.log('[CAPTCHA Check] Layer:', captchaLayer, 'Visible:', captchaVisible);
+                return {
+                  captchaGone: !captchaVisible,
+                  hasLayer: !!captchaLayer,
+                  display: captchaLayer?.style?.display
+                };
               })();
             `)
 
+            console.log(`[Naver] CAPTCHA 체크 결과:`, checkResult)
+
             if (checkResult.captchaGone) {
-              console.log(`[Naver] CAPTCHA 처리 완료`)
-              // CAPTCHA 완료 알림
+              console.log(`[Naver] CAPTCHA 처리 완료 (레이어 사라짐)`)
               getMainWindowRef()?.webContents.send('naver:captchaResolved', {
                 memberKey: targetCafeMemberKey
               })
-              resolve({ success: true, todaySentCount: todaySentCount + 1 }) // 발송 성공 시 +1
+              resolve({ success: true, todaySentCount: todaySentCount + 1 })
               return
             }
           } catch (jsError) {
-            // executeJavaScript 실패 = 페이지가 변경됨 = 발송 성공
-            console.log(`[Naver] CAPTCHA 처리 완료 (페이지 변경)`)
-            getMainWindowRef()?.webContents.send('naver:captchaResolved', {
-              memberKey: targetCafeMemberKey
-            })
-            resolve({ success: true, todaySentCount: todaySentCount + 1 }) // 발송 성공 시 +1
-            return
+            console.log(`[Naver] CAPTCHA 체크 중 오류 (계속 대기):`, jsError.message)
+            // 오류 발생해도 계속 대기 (페이지가 아직 로딩 중일 수 있음)
+            continue
           }
         }
-
-        // 타임아웃
-        console.log(`[Naver] CAPTCHA 입력 타임아웃`)
-        resolve({ success: false, error: 'CAPTCHA 입력 타임아웃 (60초)' })
-        return
+        // while(true)이므로 여기 도달하지 않음
       }
 
       // CAPTCHA 없이 성공
@@ -496,11 +625,11 @@ async function sendMessageViaBrowser(targetCafeMemberKey, content, retryCount = 
     } catch (error) {
       console.error('[Naver] sendMessageViaBrowser 실패:', error)
 
-      // ERR_FAILED (-2) 오류 시 재시도
-      if (error.code === 'ERR_FAILED' && retryCount < MAX_RETRIES) {
+      // ERR_FAILED (-2) 또는 ERR_ABORTED (-3) 오류 시 재시도
+      if ((error.code === 'ERR_FAILED' || error.code === 'ERR_ABORTED') && retryCount < MAX_RETRIES) {
         console.log(`[Naver] 재시도 ${retryCount + 1}/${MAX_RETRIES}...`)
         closeMessageWindow()
-        await new Promise(r => setTimeout(r, 1000)) // 재시도 전 1초 대기
+        await new Promise(r => setTimeout(r, 2000)) // 재시도 전 2초 대기
         const retryResult = await sendMessageViaBrowser(targetCafeMemberKey, content, retryCount + 1)
         resolve(retryResult)
         return
@@ -635,6 +764,7 @@ function getDateFilter(datePeriod) {
  */
 function register(ipcMain, mainWindowGetter, store) {
   setMainWindowGetter(mainWindowGetter)
+  dataStore = store // 모듈 레벨에서 접근 가능하도록 저장
 
   // 로그인 창 열기
   ipcMain.handle('naver:openLogin', async () => {
@@ -786,6 +916,29 @@ function register(ipcMain, mainWindowGetter, store) {
       `)
 
       console.log('[Naver] 아이디/비밀번호 자동 입력 완료')
+
+      // 로그인 완료 감지를 위한 네비게이션 이벤트 등록
+      loginWindow.webContents.removeAllListeners('did-navigate')
+      loginWindow.webContents.on('did-navigate', async (event, url) => {
+        console.log('[Naver] autoLogin 페이지 이동:', url)
+
+        // 로그인 페이지가 아닌 곳으로 이동하면 로그인 성공으로 판단
+        if (url.includes('naver.com') && !url.includes('nidlogin')) {
+          const isLoggedIn = await checkLoginStatus()
+
+          if (isLoggedIn) {
+            console.log('[Naver] autoLogin 로그인 성공 감지 - 창 자동 닫기')
+
+            setTimeout(() => {
+              getMainWindowRef()?.webContents.send('naver:loginComplete', {
+                success: true
+              })
+              closeLoginWindow()
+            }, 100)
+          }
+        }
+      })
+
       return {
         success: true,
         accountName: selectedAccount?.account_name,
@@ -989,7 +1142,32 @@ function register(ipcMain, mainWindowGetter, store) {
         const firstMember = members[0]
         const initUrl = `${NOTE_SEND_URL}?popup=1&svcType=2&targetCafeMemberKey=${firstMember.memberKey}`
 
-        await initWindow.loadURL(initUrl)
+        // 리다이렉트가 발생해도 최종 페이지 로드를 기다림
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('페이지 로드 타임아웃 (10초)'))
+          }, 10000)
+
+          initWindow.webContents.once('did-finish-load', () => {
+            clearTimeout(timeout)
+            resolve()
+          })
+
+          initWindow.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+            // 리다이렉트로 인한 ERR_ABORTED는 무시 (did-finish-load가 이어서 발생함)
+            if (errorCode === -3) {
+              console.log('[Naver] 리다이렉트 감지 - 계속 대기')
+              return
+            }
+            clearTimeout(timeout)
+            reject(new Error(`페이지 로드 실패: ${errorDescription} (${errorCode})`))
+          })
+
+          initWindow.loadURL(initUrl).catch(() => {
+            // loadURL 에러는 무시 (이벤트로 처리)
+          })
+        })
+
         await new Promise(r => setTimeout(r, 1000))
 
         const initCheck = await initWindow.webContents.executeJavaScript(`
@@ -1004,8 +1182,8 @@ function register(ipcMain, mainWindowGetter, store) {
         currentTodaySentCount = initCheck.count
         console.log(`[Naver] 초기 todaySentCount: ${currentTodaySentCount}건`)
 
-        // 초기 조회 시에도 DB 동기화
-        const activeAccount = store.findOne('accounts', { is_active: 1 })
+        // 초기 조회 시에도 DB 동기화 (네이버 계정만)
+        const activeAccount = store.findOne('accounts', { is_active: 1, account_type: 'naver' })
         if (activeAccount) {
           store.setSentCount(activeAccount.id, currentTodaySentCount)
           console.log(`[Naver] 계정 발송 현황 초기 동기화: ${activeAccount.account_name} → ${currentTodaySentCount}건`)
@@ -1014,15 +1192,63 @@ function register(ipcMain, mainWindowGetter, store) {
         // 초기 조회 후 창 닫기
         closeMessageWindow()
 
-        // 이미 50건 이상이면 발송 시작 전에 중단
+        // 이미 50건 이상이면 다른 계정 검색
         if (currentTodaySentCount >= 50) {
-          console.log(`[Naver] 일일 발송 한도 이미 도달 - 발송 시작 불가`)
+          console.log(`[Naver] 일일 발송 한도 이미 도달 - 다른 계정 검색`)
+
+          // 현재 활성 계정 확인
+          const currentAccount = store.findOne('accounts', { is_active: 1, account_type: 'naver' })
+
+          // 발송 가능한 다른 네이버 계정 검색 (한도 50건 미만)
+          const NAVER_DAILY_LIMIT = 50
+          const availableAccounts = store.find('accounts', acc =>
+            acc.account_type === 'naver' &&
+            acc.id !== currentAccount?.id &&
+            (acc.today_sent_count === null ||
+             acc.today_sent_count === undefined ||
+             acc.today_sent_count < NAVER_DAILY_LIMIT)
+          )
+
+          if (availableAccounts.length > 0) {
+            // 발송 가능한 다른 계정 있음 → 계정 전환
+            const nextAccount = availableAccounts.sort((a, b) =>
+              (a.today_sent_count || 0) - (b.today_sent_count || 0)
+            )[0]
+
+            console.log(`[Naver] 전환할 계정 발견: ${nextAccount.account_name} (현재 ${nextAccount.today_sent_count || 0}건)`)
+
+            // 세션 쿠키 삭제 (새 계정으로 깨끗하게 로그인)
+            await clearNaverSession()
+
+            // 계정 전환 필요 이벤트 전송
+            getMainWindowRef()?.webContents.send('naver:accountSwitchRequired', {
+              nextAccountId: nextAccount.id,
+              nextAccountName: nextAccount.account_name,
+              remainingMembers: members,
+              currentResults: { success: 0, failed: 0 },
+              templateContent: content
+            })
+
+            return {
+              success: false,
+              accountSwitchRequired: true,
+              results: results
+            }
+          }
+
+          // 모든 계정 한도 도달
+          console.log('[Naver] 모든 네이버 계정 한도 도달 - 발송 불가')
 
           getMainWindowRef()?.webContents.send('naver:sendLimitReached', {
             count: currentTodaySentCount,
             current: 0,
             total: members.length,
             todaySentCount: currentTodaySentCount
+          })
+
+          getMainWindowRef()?.webContents.send('naver:noAvailableAccount', {
+            message: '모든 네이버 계정이 일일 발송 한도(50건)에 도달했습니다.',
+            results: results
           })
 
           getMainWindowRef()?.webContents.send('naver:sendComplete', {
@@ -1036,6 +1262,18 @@ function register(ipcMain, mainWindowGetter, store) {
         }
       } catch (initError) {
         console.error('[Naver] 초기 todaySentCount 조회 실패:', initError)
+
+        // 초기 조회 실패 시 세션 만료로 간주하고 발송 중단
+        closeMessageWindow()
+
+        getMainWindowRef()?.webContents.send('naver:sendComplete', {
+          success: false,
+          error: '네이버 세션이 만료되었습니다. 다시 로그인해주세요.',
+          sessionExpired: true,
+          results: results
+        })
+
+        return { success: false, error: '네이버 세션 만료', sessionExpired: true, results }
       }
 
       // 초기 상태를 UI에 전송
@@ -1083,8 +1321,8 @@ function register(ipcMain, mainWindowGetter, store) {
             currentTodaySentCount = result.todaySentCount
           }
 
-          // 활성 계정의 발송 카운트 동기화 (네이버 서버 값으로 DB 저장)
-          const activeAccount = store.findOne('accounts', { is_active: 1 })
+          // 활성 네이버 계정의 발송 카운트 동기화 (네이버 서버 값으로 DB 저장)
+          const activeAccount = store.findOne('accounts', { is_active: 1, account_type: 'naver' })
           if (activeAccount && currentTodaySentCount !== undefined) {
             store.setSentCount(activeAccount.id, currentTodaySentCount)
             console.log(`[Naver] 계정 발송 현황 동기화: ${activeAccount.account_name} → ${currentTodaySentCount}건`)
@@ -1122,14 +1360,63 @@ function register(ipcMain, mainWindowGetter, store) {
         } else {
           results.failed++
 
-          // 일일 발송 한도 도달 시 전체 발송 중단
+          // 일일 발송 한도 도달 시 다른 계정 검색
           if (result.limitReached) {
-            console.log(`[Naver] 일일 발송 한도 도달 - 발송 중단`)
+            console.log(`[Naver] 일일 발송 한도 도달 - 다른 계정 검색`)
 
             // 한도 도달 시 todaySentCount 업데이트
             if (result.count !== undefined) {
               currentTodaySentCount = result.count
             }
+
+            // 현재 활성 계정 확인
+            const currentAccount = store.findOne('accounts', { is_active: 1, account_type: 'naver' })
+
+            // 발송 가능한 다른 네이버 계정 검색 (한도 50건 미만)
+            const NAVER_DAILY_LIMIT = 50
+            const availableAccounts = store.find('accounts', acc =>
+              acc.account_type === 'naver' &&
+              acc.id !== currentAccount?.id &&
+              (acc.today_sent_count === null ||
+               acc.today_sent_count === undefined ||
+               acc.today_sent_count < NAVER_DAILY_LIMIT)
+            )
+
+            if (availableAccounts.length > 0) {
+              // 발송 가능한 다른 계정 있음 → 계정 전환
+              const nextAccount = availableAccounts.sort((a, b) =>
+                (a.today_sent_count || 0) - (b.today_sent_count || 0)
+              )[0]
+
+              console.log(`[Naver] 전환할 계정 발견: ${nextAccount.account_name} (현재 ${nextAccount.today_sent_count || 0}건)`)
+
+              // 메시지 윈도우 닫기
+              closeMessageWindow()
+
+              // 세션 쿠키 삭제 (새 계정으로 깨끗하게 로그인)
+              await clearNaverSession()
+
+              // 남은 회원 목록
+              const remainingMembers = members.slice(i)
+
+              // 계정 전환 필요 이벤트 전송
+              getMainWindowRef()?.webContents.send('naver:accountSwitchRequired', {
+                nextAccountId: nextAccount.id,
+                nextAccountName: nextAccount.account_name,
+                remainingMembers: remainingMembers,
+                currentResults: { success: results.success, failed: results.failed },
+                templateContent: content
+              })
+
+              return {
+                success: false,
+                accountSwitchRequired: true,
+                results: results
+              }
+            }
+
+            // 모든 계정 한도 도달
+            console.log('[Naver] 모든 네이버 계정 한도 도달')
 
             // 메시지 윈도우 닫기
             closeMessageWindow()
@@ -1140,6 +1427,12 @@ function register(ipcMain, mainWindowGetter, store) {
               current: i,
               total: total,
               todaySentCount: currentTodaySentCount
+            })
+
+            // 발송 가능한 계정 없음 이벤트 전송
+            getMainWindowRef()?.webContents.send('naver:noAvailableAccount', {
+              message: '모든 네이버 계정이 일일 발송 한도(50건)에 도달했습니다.',
+              results: results
             })
 
             // 발송 완료 이벤트 전송
@@ -1215,26 +1508,41 @@ function register(ipcMain, mainWindowGetter, store) {
   // 다음 로그인 창 열기
   ipcMain.handle('daum:openLogin', async () => {
     try {
-      // 이미 로그인된 상태인지 확인
-      const isAlreadyLoggedIn = await checkDaumLoginStatus()
-      if (isAlreadyLoggedIn) {
-        console.log('[Daum] 이미 로그인된 상태 - 바로 크롤링 시작 가능')
-        // 로그인 완료 이벤트 바로 전송
-        const mainWindow = getMainWindowRef()
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('daum:loginComplete', {
-            success: true,
-            alreadyLoggedIn: true
-          })
-        }
-        return { success: true, alreadyLoggedIn: true }
-      }
+      // 다음 카페 크롤링은 항상 로그인 창 표시 필요
+      // (이전 세션이 있어도 크롤링 전 재로그인 필요)
+      console.log('[Daum] 로그인 창 열기 (크롤링 전 필수)')
 
       // 기존 로그인 창이 있으면 닫기 (ERR_FAILED 방지)
       closeDaumLoginWindow()
       await new Promise(r => setTimeout(r, 300)) // 창 닫힘 대기
 
       const window = createDaumLoginWindow()
+
+      // 시스템 알림 표시 (사용자가 다른 작업 중일 수 있음)
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: '🔐 다음 로그인 필요',
+          body: '다음 카페 크롤링을 위해 로그인이 필요합니다.',
+          urgency: 'normal',
+          silent: false
+        })
+        notification.show()
+
+        // 알림 클릭 시 로그인 창으로 포커스
+        notification.on('click', () => {
+          if (window && !window.isDestroyed()) {
+            window.focus()
+          }
+        })
+      }
+
+      // UI에도 알림 전송
+      const mainWindow = getMainWindowRef()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('daum:loginRequired', {
+          message: '다음 로그인이 필요합니다'
+        })
+      }
 
       // 기존 이벤트 핸들러 제거 후 새로 등록 (중복 방지) - loadURL 전에 등록!
       window.webContents.removeAllListeners('did-navigate')

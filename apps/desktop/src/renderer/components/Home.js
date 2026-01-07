@@ -10,6 +10,7 @@ let templates = [] // 템플릿 목록
 let isSending = false // 발송 진행 중 여부
 let sendProgress = { current: 0, total: 0, todaySentCount: 0 } // 발송 진행 상황
 let activeAccountType = 'naver' // 활성 계정 유형 (네이버/다음)
+let pendingAccountSwitch = null // 계정 전환 후 발송 재개용
 
 // 계정 유형별 일일 발송 한도
 const DAILY_LIMIT = {
@@ -667,6 +668,64 @@ function updateSendProgressUI(data) {
 }
 
 /**
+ * 활성화된 다음 카페가 있는지 확인
+ */
+async function hasActiveDaumCafes() {
+  try {
+    const cafes = await window.api.cafes.getAll()
+    return cafes.some(cafe => cafe.cafe_type === 'daum' && cafe.is_active === 1)
+  } catch (error) {
+    console.error('[Home] 다음 카페 확인 실패:', error)
+    return false
+  }
+}
+
+/**
+ * 다음 계정이 있는지 확인
+ */
+async function hasDaumAccounts() {
+  try {
+    const accounts = await window.api.accounts.getAll()
+    return accounts.some(acc => acc.account_type === 'daum')
+  } catch (error) {
+    console.error('[Home] 다음 계정 확인 실패:', error)
+    return false
+  }
+}
+
+/**
+ * 네이버 크롤링 결과 0명일 때 다음 카페 자동 폴백
+ * @returns {Promise<boolean>} 폴백 시작 여부
+ */
+async function tryDaumFallback() {
+  try {
+    const hasDaumCafe = await hasActiveDaumCafes()
+    if (!hasDaumCafe) {
+      console.log('[Home] 활성화된 다음 카페 없음 - 폴백 스킵')
+      return false
+    }
+
+    const hasDaum = await hasDaumAccounts()
+    if (!hasDaum) {
+      console.log('[Home] 다음 계정 없음 - 폴백 스킵')
+      return false
+    }
+
+    const resultEl = document.getElementById('crawling-result')
+    if (resultEl) {
+      resultEl.textContent = '네이버에서 회원을 찾지 못해 다음 카페를 탐색합니다...'
+    }
+
+    console.log('[Home] 다음 카페 자동 폴백 시작')
+    await window.api.daum.openLogin()
+    return true
+  } catch (error) {
+    console.error('[Home] 다음 카페 폴백 실패:', error)
+    return false
+  }
+}
+
+/**
  * 다음 계정이 있으면 다음 카페 크롤링 시작 (네이버 발송 완료 후 자동 호출)
  */
 async function startDaumCrawlingIfAvailable() {
@@ -718,10 +777,9 @@ function handleSendComplete(data) {
   updateSendButtonState()
   renderMembersList()
 
-  // 네이버 발송 완료 후 다음 계정이 있으면 다음 카페 크롤링 자동 시작
-  if (data.success && !data.cancelled) {
-    startDaumCrawlingIfAvailable()
-  }
+  // 네이버 발송 완료 후 항상 다음 카페 크롤링 시작 (성공/실패/취소 무관)
+  console.log('[Home] 네이버 작업 완료 - 다음 카페 크롤링 시작')
+  startDaumCrawlingIfAvailable()
 }
 
 /**
@@ -876,7 +934,7 @@ export function attachHomeEvents() {
   })
 
   // IPC 이벤트 리스너: 크롤링 완료
-  window.api.naver.onCrawlComplete((event, data) => {
+  window.api.naver.onCrawlComplete(async (event, data) => {
     console.log('[Home] 크롤링 완료:', data)
     isCrawling = false
 
@@ -887,23 +945,71 @@ export function attachHomeEvents() {
     }
 
     const resultEl = document.getElementById('crawling-result')
-    if (resultEl) {
-      if (data.success) {
-        const periodLabel = PERIOD_OPTIONS.find(p => p.value === data.datePeriod)?.label || data.datePeriod
+
+    if (data.success) {
+      const periodLabel = PERIOD_OPTIONS.find(p => p.value === data.datePeriod)?.label || data.datePeriod
+
+      // 네이버 크롤링 결과 0명일 때 다음 카페 폴백
+      if (data.count === 0) {
+        console.log('[Home] 네이버 크롤링 결과 0명 - 다음 카페 폴백 시도')
+
+        if (resultEl) {
+          resultEl.textContent = `${periodLabel} 이내 네이버 카페에서 회원을 찾지 못했습니다. 다음 카페 확인 중...`
+        }
+
+        const fallbackStarted = await tryDaumFallback()
+
+        if (!fallbackStarted) {
+          if (resultEl) {
+            resultEl.textContent = `${periodLabel} 이내 회원이 없습니다.`
+          }
+          showExploreStatus('complete')
+          renderMembersList()
+        }
+        // 폴백 시작된 경우: daum:loginComplete 이벤트에서 처리됨
+        return
+      }
+
+      // 기존 로직: 결과 있을 때
+      if (resultEl) {
         resultEl.textContent = `${periodLabel} 이내 총 ${data.count}명의 회원을 수집했습니다.`
-      } else {
+      }
+    } else {
+      if (resultEl) {
         resultEl.textContent = `오류: ${data.error}`
       }
     }
 
     showExploreStatus('complete')
-    renderMembersList() // 버튼 활성화 상태 업데이트
+    renderMembersList()
   })
 
   // IPC 이벤트 리스너: 로그인 완료
   console.log('[Home] onLoginComplete 이벤트 리스너 등록')
-  window.api.naver.onLoginComplete((event, data) => {
+  window.api.naver.onLoginComplete(async (event, data) => {
     console.log('[Home] 로그인 완료 이벤트 수신:', data)
+
+    // 계정 전환 후 발송 재개 처리
+    if (data.success && pendingAccountSwitch) {
+      console.log('[Home] 계정 전환 후 발송 재개')
+      const { remainingMembers, templateContent } = pendingAccountSwitch
+      pendingAccountSwitch = null
+
+      // 남은 회원에게 발송 재개
+      isSending = true
+      showSendingStatus('sending')
+
+      try {
+        await window.api.naver.startSending(remainingMembers, templateContent)
+      } catch (error) {
+        console.error('[Home] 발송 재개 실패:', error)
+        alert('발송 재개에 실패했습니다: ' + error.message)
+        isSending = false
+        showSendingStatus('complete')
+      }
+      return
+    }
+
     console.log('[Home] 현재 상태 - selectedTemplate:', !!selectedTemplate, ', collectedMembers:', collectedMembers.length)
     if (data.success && selectedTemplate && collectedMembers.length > 0) {
       // 로그인 성공 시 자동으로 발송 시작
@@ -939,9 +1045,49 @@ export function attachHomeEvents() {
   })
 
   // IPC 이벤트 리스너: 발송 가능한 계정 없음
-  window.api.naver.onNoAvailableAccount((event, data) => {
+  window.api.naver.onNoAvailableAccount(async (event, data) => {
     console.log('[Home] 발송 가능한 계정 없음:', data)
     alert(data.message || '발송 가능한 네이버 계정이 없습니다.\n모든 계정이 일일 발송 한도(50건)에 도달했습니다.')
+
+    // autoLogin에서 발생한 경우 (results가 없음) → 직접 다음 크롤링 시작
+    // startSending에서 발생한 경우 (results가 있음) → sendComplete에서 처리됨
+    if (!data.results) {
+      console.log('[Home] autoLogin 단계에서 계정 없음 - 다음 카페 크롤링 시작')
+      startDaumCrawlingIfAvailable()
+    }
+  })
+
+  // IPC 이벤트 리스너: 계정 전환 필요 (한도 도달 시 다른 계정으로 전환)
+  window.api.naver.onAccountSwitchRequired(async (event, data) => {
+    console.log('[Home] 계정 전환 필요:', data)
+
+    const { nextAccountId, nextAccountName, remainingMembers, currentResults, templateContent } = data
+
+    // 현재 발송 결과 표시
+    const resultEl = document.getElementById('sending-result')
+    if (resultEl) {
+      resultEl.textContent = `한도 도달 - 성공: ${currentResults.success}명. ${nextAccountName} 계정으로 전환합니다...`
+    }
+
+    // 상태 저장 (로그인 완료 후 발송 재개용)
+    pendingAccountSwitch = {
+      remainingMembers,
+      templateContent
+    }
+
+    try {
+      // 1. 다음 계정 활성화
+      await window.api.accounts.setActive(nextAccountId)
+      console.log(`[Home] 계정 활성화 완료: ${nextAccountName}`)
+
+      // 2. 네이버 로그인 창 열기 (자동 로그인)
+      const credentials = await window.api.accounts.getActiveCredentials()
+      await window.api.naver.autoLogin(credentials)
+    } catch (error) {
+      console.error('[Home] 계정 전환 실패:', error)
+      alert('계정 전환에 실패했습니다: ' + error.message)
+      pendingAccountSwitch = null
+    }
   })
 
   // IPC 이벤트 리스너: 다음 로그인 완료
